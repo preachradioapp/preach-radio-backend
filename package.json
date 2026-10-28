@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "build": "node api.js && tsc",
+    "build": "tsc",
     "start:dev": " ts-node-dev --respawn --transpile-only src/server.ts",
     "start:prod": "./dist/server.js",
     "dev:docker": "docker-compose -f docker-compose.dev.yml up",

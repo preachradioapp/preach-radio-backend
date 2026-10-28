@@ -36,6 +36,7 @@ router.get(
     auth(USER_ROLE.creator, USER_ROLE.superAdmin),
     podcastController.getMyPodcasts
 );
+// get podcast feed for user
 router.get(
     '/get-podcast-feed',
     auth(USER_ROLE.user, USER_ROLE.creator, USER_ROLE.superAdmin),

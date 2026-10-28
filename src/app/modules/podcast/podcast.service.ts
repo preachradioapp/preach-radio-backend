@@ -407,12 +407,12 @@ export const getPodcastFeedForUser = async (
     if (!firstPodcast) throw new Error('First podcast not found');
 
     // Step 2: Aggregate podcasts
-    let podcastsAgg = await Podcast.aggregate([
+    const buildFeedPipeline = (cursor?: string): mongoose.PipelineStage[] => [
         {
             $match: {
                 _id: { $ne: new mongoose.Types.ObjectId(firstPodcastId) },
-                ...(lastId
-                    ? { _id: { $lt: new mongoose.Types.ObjectId(lastId) } }
+                ...(cursor
+                    ? { _id: { $lt: new mongoose.Types.ObjectId(cursor) } }
                     : {}),
             },
         },
@@ -506,7 +506,14 @@ export const getPodcastFeedForUser = async (
             },
         },
         { $limit: limit },
-    ]);
+    ];
+
+    let podcastsAgg = await Podcast.aggregate(buildFeedPipeline(lastId));
+
+    // When the cursor is exhausted, sample from the full podcast collection again.
+    if (podcastsAgg.length === 0 && lastId) {
+        podcastsAgg = await Podcast.aggregate(buildFeedPipeline());
+    }
 
     // Step 3: Ensure always data is returned
     if (podcastsAgg.length === 0) {

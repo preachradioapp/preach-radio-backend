@@ -41,6 +41,7 @@ export default {
         hms_access_key: process.env.HMS_ACCESS_KEY,
         hms_secret: process.env.HMS_SECRET,
         template_id: process.env.HMS_TEMPLATE_ID,
+        webhook_secret: process.env.HMS_WEBHOOK_SECRET,
     },
     smartsheet_api_key: process.env.SMARTSHEET_API_KEY,
 };

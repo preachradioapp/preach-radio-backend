@@ -105,11 +105,13 @@ const resendVerifyCode = catchAsync(async (req, res) => {
 });
 
 const oAuthLogin = catchAsync(async (req, res) => {
-    const { provider, token, role } = req.body;
+    const { provider, token } = req.body;
     if (!['google', 'apple', 'facebook'].includes(provider)) {
         throw new AppError(httpStatus.BAD_REQUEST, 'Invalid provider');
     }
-    const result = await authServices.loginWithOAuth(provider, token, role);
+    // role is intentionally not accepted from the client here: OAuth signup
+    // must never let a caller choose their own privilege level.
+    const result = await authServices.loginWithOAuth(provider, token);
     res.cookie('refresh-token', result.refreshToken, {
         httpOnly: true,
         secure: true,

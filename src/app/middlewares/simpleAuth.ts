@@ -70,18 +70,16 @@ const simpleAuth = async (req: Request, res: Response, next: NextFunction) => {
         let decoded: JwtPayload | null = null;
 
         try {
-            // Verify token to check validity
+            // Verify token to check validity. Any failure (including an
+            // expired token) must NOT fall back to an unverified decode --
+            // that would accept a forged signature as long as it "looked"
+            // expired.
             decoded = jwt.verify(
                 token,
                 config.jwt_access_secret as string
             ) as JwtPayload;
         } catch (err: any) {
-            // If token expired, decode without verifying
-            if (err.name === 'TokenExpiredError') {
-                decoded = jwt.decode(token) as JwtPayload | null;
-            } else {
-                return next(); // Ignore other errors
-            }
+            return next(); // Ignore invalid/expired tokens
         }
 
         if (decoded) {

@@ -10,6 +10,11 @@ const PodcastSchema = new Schema<IPodcast>(
             // required: true,
             default: null,
         },
+        station: {
+            type: Schema.Types.ObjectId,
+            ref: 'Station',
+            default: null,
+        },
         category: {
             type: Schema.Types.ObjectId,
             ref: 'Category',
@@ -56,11 +61,7 @@ const PodcastSchema = new Schema<IPodcast>(
                 },
             },
         ],
-        station: {
-            type: Schema.Types.ObjectId,
-            ref: 'Station',
-            default: null,
-        },
+
     },
     { timestamps: true }
 );

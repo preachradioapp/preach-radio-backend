@@ -34,8 +34,7 @@ const auth = (...requiredRoles: TUserRole[]) => {
             } catch (err) {
                 throw new AppError(httpStatus.UNAUTHORIZED, 'Token is expired');
             }
-            // eslint-disable-next-line @typescript-eslint/no-unused-vars
-            const { id, role, iat } = decoded;
+            const { id, iat } = decoded;
 
             // get the user if that here ---------
             const user = await User.findById(id).select(
@@ -76,14 +75,15 @@ const auth = (...requiredRoles: TUserRole[]) => {
                     );
                 }
             }
-            if (requiredRoles && !requiredRoles.includes(role)) {
+            if (requiredRoles && !requiredRoles.includes(user.role)) {
                 throw new AppError(
                     httpStatus.UNAUTHORIZED,
                     'Your are not authorized 3'
                 );
             }
-            // add those properties in req
-            req.user = decoded as JwtPayload;
+            // add those properties in req, using the role currently stored
+            // on the user document rather than the (possibly stale) JWT role
+            req.user = { ...decoded, role: user.role } as JwtPayload;
             next();
         }
     );

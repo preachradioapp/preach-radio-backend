@@ -148,6 +148,7 @@ import { ErrorRequestHandler } from 'express';
 import { ZodError } from 'zod';
 import AppError from '../error/appError';
 import mongoose from 'mongoose';
+import config from '../config';
 const globalErrorHandler: ErrorRequestHandler = (
   err,
   req,
@@ -200,7 +201,7 @@ const globalErrorHandler: ErrorRequestHandler = (
     message: errorMessage,
     // errorMessage: errorMessage,
     errorDetails,
-    stack: err?.stack || null,
+    stack: config.NODE_ENV !== 'production' ? err?.stack || null : undefined,
     // err,
   });
 };

@@ -20,6 +20,8 @@ import { ILiveSession } from './app/modules/liveSession/liveSession.interface';
 import LiveSessionServices from './app/modules/liveSession/liveSession.service';
 import router from './app/routes';
 import redis from './app/utilities/redisClient';
+import config from './app/config';
+import { logger } from './app/shared/logger';
 const app: Application = express();
 dotenv.config();
 
@@ -64,6 +66,19 @@ app.get('/', async (req, res) => {
 });
 
 app.post('/webhooks/100ms', async (req, res) => {
+    // Verify the shared secret configured in both the 100ms dashboard and
+    // HMS_WEBHOOK_SECRET so this endpoint can't be driven by forged events.
+    // Gated on the env var being set so this doesn't break delivery until
+    // the secret has actually been configured on both ends.
+    if (config.hms.webhook_secret) {
+        const providedSecret =
+            req.headers['x-webhook-secret'] || req.query.secret;
+        if (providedSecret !== config.hms.webhook_secret) {
+            logger.warn('Rejected 100ms webhook: invalid/missing secret');
+            return res.sendStatus(401);
+        }
+    }
+
     const event = req.body;
 
     console.log(

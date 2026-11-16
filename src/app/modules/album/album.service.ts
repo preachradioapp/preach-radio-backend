@@ -90,7 +90,7 @@ const addPodcastToAlbum = async (albumId: string, podcastId: string) => {
         throw new AppError(httpStatus.NOT_FOUND, 'Album not found');
     }
 
-    if (album.podcasts.includes(new mongoose.Types.ObjectId(podcastId))) {
+    if (album.podcasts.some((p) => p.toString() === podcastId)) {
         throw new AppError(httpStatus.BAD_REQUEST, 'Podcast already in album');
     }
 
@@ -108,7 +108,7 @@ const removePodcastFromAlbum = async (albumId: string, podcastId: string) => {
         throw new AppError(httpStatus.NOT_FOUND, 'Album not found');
     }
 
-    if (!album.podcasts.includes(new mongoose.Types.ObjectId(podcastId))) {
+    if (!album.podcasts.some((p) => p.toString() === podcastId)) {
         throw new AppError(
             httpStatus.BAD_REQUEST,
             'Podcast not found in album'

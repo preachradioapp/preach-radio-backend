@@ -61,7 +61,8 @@ import config from '../config';
 
 const simpleAuth = async (req: Request, res: Response, next: NextFunction) => {
     try {
-        const token = req.headers.authorization;
+        // Accept both "Bearer <token>" and a raw token (same as `auth`).
+        const token = req.headers.authorization?.replace(/^Bearer\s+/i, '');
 
         if (!token) {
             return next(); // Continue if no token is provided

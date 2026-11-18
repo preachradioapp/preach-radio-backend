@@ -6,6 +6,7 @@ import redis from '../../utilities/redisClient';
 import { User } from '../user/user.model';
 import { ICreator } from './creator.interface';
 import Creator from './creator.model';
+import podcastService from '../podcast/podcast.service';
 
 const updateCreatorProfile = async (id: string, payload: Partial<ICreator>) => {
     const creator = await Creator.findById(id);
@@ -383,19 +384,32 @@ const getTopCreators = async (query: Record<string, unknown>) => {
 
     return { meta, result };
 };
-const approveRejectCreator = async (id: string, isApproved: boolean) => {
+const approveRejectCreator = async (
+    id: string,
+    rawIsApproved: boolean | string
+) => {
     const creator = await Creator.findById(id);
     if (!creator) {
         throw new AppError(httpStatus.NOT_FOUND, 'Creator not found');
     }
-    if (isApproved) {
+    // Accept only real booleans (or their exact string forms): a truthy check
+    // would treat the string "false" as an approval.
+    const isApproved =
+        rawIsApproved === true || rawIsApproved === 'true'
+            ? true
+            : rawIsApproved === false || rawIsApproved === 'false'
+              ? false
+              : undefined;
+    if (isApproved === true) {
         const result = await Creator.findByIdAndUpdate(
             id,
             { isApproved: true },
             { new: true, runValidators: true }
         );
         return result;
-    } else if (isApproved == false) {
+    } else if (isApproved === false) {
+        // Rejection deletes the account, so it must take the creator's content too.
+        await podcastService.deleteAllPodcastsOfCreator(id);
         await Creator.findByIdAndDelete(id);
         await User.deleteOne({ _id: creator.user });
         return null;

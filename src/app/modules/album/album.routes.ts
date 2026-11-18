@@ -60,7 +60,7 @@ router.patch(
 
 router.delete(
     '/delete/:albumId',
-    auth(USER_ROLE.superAdmin, USER_ROLE.admin, USER_ROLE.user),
+    auth(USER_ROLE.superAdmin, USER_ROLE.admin),
     AlbumController.deleteAlbum
 );
 router.post(

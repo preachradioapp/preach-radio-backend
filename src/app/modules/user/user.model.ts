@@ -3,7 +3,7 @@ import { TUser, UserModel } from './user.interface';
 // import config from '../../config';
 import bcrypt from 'bcrypt';
 import config from '../../config';
-import redis from '../../utilities/redisClient';
+import { deleteByPattern } from '../../utilities/cache';
 
 const userSchema = new Schema<TUser>(
     {
@@ -121,10 +121,7 @@ userSchema.statics.isJWTIssuedBeforePasswordChange = async function (
 };
 
 const deleteAllCreatorCache = async () => {
-    const keys = await redis.keys('all-creators:*');
-    if (keys.length > 0) {
-        await redis.del(...keys);
-    }
+    await deleteByPattern('all-creators:*');
 };
 userSchema.post('save', deleteAllCreatorCache);
 userSchema.post('findOneAndUpdate', deleteAllCreatorCache);

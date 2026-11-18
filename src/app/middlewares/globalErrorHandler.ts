@@ -149,6 +149,7 @@ import { ZodError } from 'zod';
 import AppError from '../error/appError';
 import mongoose from 'mongoose';
 import config from '../config';
+import multer from 'multer';
 const globalErrorHandler: ErrorRequestHandler = (
   err,
   req,
@@ -180,6 +181,18 @@ const globalErrorHandler: ErrorRequestHandler = (
     errorDetails = {
       issues: err.issues,
     };
+    statusCode = 400;
+  } else if (err instanceof multer.MulterError) {
+    statusCode = 400;
+    errorMessage =
+      err.code === 'LIMIT_FILE_SIZE'
+        ? 'File is too large'
+        : err.code === 'LIMIT_UNEXPECTED_FILE'
+          ? `Unexpected file field: ${err.field}`
+          : err.message;
+  } else if (err instanceof SyntaxError && 'body' in err) {
+    statusCode = 400;
+    errorMessage = 'Malformed JSON in request body';
   } else if (err instanceof mongoose.Error.ValidationError) {
     // message = 'Mongoose Validation Error';
     errorMessage = Object.values(err.errors)

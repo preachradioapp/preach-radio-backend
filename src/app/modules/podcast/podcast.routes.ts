@@ -1,7 +1,7 @@
 import express, { NextFunction, Request, Response } from 'express';
 import { uploadFile } from '../../helper/mutler-s3-uploader';
 import auth from '../../middlewares/auth';
-import { publicCache } from '../../middlewares/cacheControl';
+import simpleAuth from '../../middlewares/simpleAuth';
 import validateRequest from '../../middlewares/validateRequest';
 import { USER_ROLE } from '../user/user.constant';
 import podcastController from './podcast.controller';
@@ -30,7 +30,16 @@ router.patch(
     podcastController.updatePodcast
 );
 
-router.get('/all', podcastController.getAllPodcasts);
+// Optional auth: lets admins request hidden podcasts (`includeHidden=true`).
+router.get('/all', simpleAuth, podcastController.getAllPodcasts);
+
+// Admin moderation: hide / publish a podcast without deleting it.
+router.patch(
+    '/status/:id',
+    auth(USER_ROLE.superAdmin),
+    validateRequest(podcastValidation.updatePodcastStatusValidationSchema),
+    podcastController.setPodcastStatus
+);
 router.get(
     '/my-podcasts',
     auth(USER_ROLE.creator, USER_ROLE.superAdmin),
@@ -44,7 +53,9 @@ router.get(
 );
 router.get(
     '/get-single/:id',
-    publicCache(),
+    // Optional auth: adds isLike/isBookmark for signed-in users. Cache headers
+    // are set in the controller (public when anonymous, private when signed in).
+    simpleAuth,
     podcastController.getSinglePodcast
 );
 router.delete(

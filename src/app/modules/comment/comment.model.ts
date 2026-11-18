@@ -41,5 +41,8 @@ const commentSchema = new Schema<IComment>(
     { timestamps: true }
 );
 
+// Comment lists and per-podcast comment counts filter by podcast.
+commentSchema.index({ podcast: 1, createdAt: -1 });
+
 const Comment = model<IComment>('Comment', commentSchema);
 export default Comment;

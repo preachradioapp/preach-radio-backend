@@ -8,7 +8,6 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import express, { Application } from 'express';
 import httpStatus from 'http-status';
-import AppError from './app/error/appError';
 import {
     generateMultiplePresignedUrls,
     generatePresignedUrl,
@@ -51,7 +50,7 @@ app.use(
             'http://192.168.0.16:3004',
             'http://10.10.20.60:3003',
             'https://admin.preachradio.com',
-            "http://10.10.28.176:3000"
+            'http://10.10.28.176:3000',
         ],
         credentials: true,
     })
@@ -146,12 +145,14 @@ app.get('/redis-health', async (req, res) => {
 
 // for s3 bucket-------------------
 app.post('/generate-presigned-url', async (req, res) => {
-    const { fileType, fileCategory } = req.body;
-    if (!fileType || !fileCategory) {
-        throw new AppError(
-            httpStatus.BAD_REQUEST,
-            'File type and file category is required'
-        );
+    const { fileType, fileCategory } = req.body || {};
+    // Throwing here would hang the request (Express 4 doesn't catch async throws).
+    if (typeof fileType !== 'string' || typeof fileCategory !== 'string') {
+        res.status(httpStatus.BAD_REQUEST).json({
+            success: false,
+            message: 'File type and file category is required',
+        });
+        return;
     }
 
     try {

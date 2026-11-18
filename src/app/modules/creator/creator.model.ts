@@ -1,5 +1,5 @@
 import { Schema, model } from 'mongoose';
-import redis from '../../utilities/redisClient';
+import { deleteByPattern } from '../../utilities/cache';
 import { ENUM_GENDER } from '../user/user.enum';
 import { ICreator } from './creator.interface';
 
@@ -39,10 +39,7 @@ const creatorSchema = new Schema<ICreator>(
     { timestamps: true }
 );
 const deleteAllCreatorCache = async () => {
-    const keys = await redis.keys('all-creators:*');
-    if (keys.length > 0) {
-        await redis.del(...keys);
-    }
+    await deleteByPattern('all-creators:*');
 };
 
 creatorSchema.post('save', deleteAllCreatorCache);

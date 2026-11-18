@@ -18,6 +18,7 @@ import registrationSuccessEmailBody from '../../mailTemplate/registerSucessEmail
 import sendEmail from '../../utilities/sendEmail';
 import Admin from '../admin/admin.model';
 import Creator from '../creator/creator.model';
+import podcastService from '../podcast/podcast.service';
 import { TUser, TUserRole } from './user.interface';
 import { createToken } from './user.utils';
 dotenv.config();
@@ -192,7 +193,14 @@ const deleteUserAccount = async (user: JwtPayload, password: string) => {
         throw new AppError(httpStatus.FORBIDDEN, 'Password do not match');
     }
 
-    await NormalUser.findByIdAndDelete(user.profileId);
+    if (userData.role === USER_ROLE.creator) {
+        // Previously this always deleted from NormalUser, so a creator's profile
+        // (and all their podcasts) were left behind.
+        await podcastService.deleteAllPodcastsOfCreator(user.profileId);
+        await Creator.findByIdAndDelete(user.profileId);
+    } else {
+        await NormalUser.findByIdAndDelete(user.profileId);
+    }
     await User.findByIdAndDelete(user.id);
 
     return null;
@@ -289,31 +297,54 @@ cron.schedule('*/2 * * * *', async () => {
     }
 });
 
-const changeUserStatus = async (id: string) => {
+const PROTECTED_ROLES: string[] = [USER_ROLE.superAdmin, USER_ROLE.admin];
+
+const assertManageable = (
+    target: { _id: unknown; role: string },
+    actorId?: string
+) => {
+    if (actorId && String(target._id) === String(actorId)) {
+        throw new AppError(
+            httpStatus.BAD_REQUEST,
+            'You cannot perform this action on your own account'
+        );
+    }
+    if (PROTECTED_ROLES.includes(target.role)) {
+        throw new AppError(
+            httpStatus.FORBIDDEN,
+            'Administrator accounts cannot be modified from here'
+        );
+    }
+};
+
+const changeUserStatus = async (id: string, actorId?: string) => {
     const user = await User.findById(id);
     if (!user) {
         throw new AppError(httpStatus.NOT_FOUND, 'User not found');
     }
+    assertManageable(user, actorId);
 
     const result = await User.findByIdAndUpdate(
         id,
         { isBlocked: !user.isBlocked },
         { new: true, runValidators: true }
-    );
+    ).select('-password');
     return result;
 };
 
-const deleteUserByAdmin = async (userId: string) => {
+const deleteUserByAdmin = async (userId: string, actorId?: string) => {
     const user = await User.findById(userId);
     if (!user) {
         throw new AppError(httpStatus.NOT_FOUND, 'User not found');
     }
+    assertManageable(user, actorId);
 
     await User.findByIdAndDelete(user._id);
     if (user.role == USER_ROLE.user) {
         const result = await NormalUser.findByIdAndDelete(user.profileId);
         return result;
     } else if (user.role == USER_ROLE.creator) {
+        await podcastService.deleteAllPodcastsOfCreator(String(user.profileId));
         const result = await Creator.findByIdAndDelete(user.profileId);
         return result;
     }

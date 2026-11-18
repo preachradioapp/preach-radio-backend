@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import httpStatus from 'http-status';
 import { JwtPayload } from 'jsonwebtoken';
-import mongoose from 'mongoose';
+import mongoose, { PipelineStage } from 'mongoose';
 import QueryBuilder from '../../builder/QueryBuilder';
 import { CACHE_TTL_SECONDS } from '../../constant';
 import AppError from '../../error/appError';
@@ -12,13 +12,122 @@ import redis from '../../utilities/redisClient';
 import Album from '../album/album.model';
 import Bookmark from '../bookmark/bookmark.model';
 import Category from '../category/category.model';
+import Comment from '../comment/comment.model';
 import Creator from '../creator/creator.model';
 import SubCategory from '../subCategory/subCategory.model';
 import { USER_ROLE } from '../user/user.constant';
 import WatchHistory from '../watchHistory/watchHistory.model';
-import { IPodcast } from './podcast.interface';
-import Podcast from './podcast.model';
-const createPodcastIntoDB = async (userData: JwtPayload, payload: IPodcast) => {
+import { IPodcast, PODCAST_STATUS, TPodcastStatus } from './podcast.interface';
+import Podcast, { detectMediaType } from './podcast.model';
+import Like from '../like/like.model';
+import { deleteKeys, userCacheKeys } from '../../utilities/cache';
+import { Station } from '../station/station.model';
+import { escapeRegex } from '../../helper/sanitizeQuery';
+import { clipFilter, typeFilterFromQuery } from './podcast.constant';
+import { typeRuleViolations } from './podcast.validation';
+/** Fields a client may set. Counters, ownership and moderation status are server-controlled. */
+const EDITABLE_FIELDS = [
+    'category',
+    'subCategory',
+    'coverImage',
+    'podcast_url',
+    'mediaType',
+    'title',
+    'description',
+    'location',
+    'address',
+    'tags',
+    'duration',
+    'durationSeconds',
+    'type',
+    'sourcePodcast',
+] as const;
+
+const pickEditable = (payload: Partial<IPodcast>) => {
+    const clean: Record<string, unknown> = {};
+    for (const key of EDITABLE_FIELDS) {
+        if (payload[key] !== undefined) clean[key] = payload[key];
+    }
+    // Keep mediaType in sync when the media file changes.
+    if (clean.podcast_url && !clean.mediaType) {
+        clean.mediaType = detectMediaType(clean.podcast_url as string);
+    }
+    return clean as Partial<IPodcast>;
+};
+
+/**
+ * The Station model calls its field `donationUrl`, while creators (and the apps)
+ * use `donationLink`. Expose both on populated stations so the donate button works.
+ */
+const withStationDonationLink = <T>(podcast: T): T => {
+    const station = (podcast as any)?.station;
+    if (station && typeof station === 'object' && 'donationUrl' in station) {
+        station.donationLink = station.donationUrl;
+    }
+    return podcast;
+};
+
+/** Admin edits must reach hidden podcasts too (e.g. to un-hide them). */
+const ADMIN_QUERY = { includeHidden: true };
+
+/** A clip's source must be an existing, visible full episode (not another clip). */
+const assertValidSource = async (sourceId: unknown, selfId?: string) => {
+    if (!sourceId) return;
+    if (selfId && String(sourceId) === selfId) {
+        throw new AppError(httpStatus.BAD_REQUEST, 'A clip cannot be its own source');
+    }
+    const source = await Podcast.findById(sourceId).select('type').lean();
+    if (!source) {
+        throw new AppError(httpStatus.NOT_FOUND, 'Source podcast not found');
+    }
+    if (source.type === 'clip') {
+        throw new AppError(
+            httpStatus.BAD_REQUEST,
+            'A clip can only link to a full episode'
+        );
+    }
+};
+
+/**
+ * Updates are partial, so the episode/clip rules are checked against the record
+ * as it will be after the update.
+ */
+const assertTypeRulesOnUpdate = async (
+    existing: Partial<IPodcast> & { _id: unknown },
+    payload: Partial<IPodcast>
+) => {
+    const type = payload.type ?? existing.type ?? 'episode';
+    // Turning a clip back into an episode drops its source link.
+    if (type === 'episode' && payload.sourcePodcast === undefined) {
+        if (existing.sourcePodcast) payload.sourcePodcast = null;
+    }
+    const merged = {
+        type,
+        durationSeconds: payload.durationSeconds ?? existing.durationSeconds,
+        location: (payload.location ?? existing.location) as never,
+        address: payload.address ?? existing.address,
+        sourcePodcast:
+            payload.sourcePodcast !== undefined
+                ? payload.sourcePodcast
+                : existing.sourcePodcast,
+    };
+    const errors = typeRuleViolations({
+        ...merged,
+        sourcePodcast: merged.sourcePodcast ? String(merged.sourcePodcast) : null,
+    });
+    if (errors.length) {
+        throw new AppError(httpStatus.BAD_REQUEST, errors.join('. '));
+    }
+    if (payload.sourcePodcast) {
+        await assertValidSource(payload.sourcePodcast, String(existing._id));
+    }
+};
+
+const createPodcastIntoDB = async (
+    userData: JwtPayload,
+    rawPayload: IPodcast
+) => {
+    const payload = pickEditable(rawPayload) as IPodcast;
     const userId = userData.profileId as string;
     const [category, subCategory] = await Promise.all([
         Category.findById(payload.category),
@@ -40,23 +149,52 @@ const createPodcastIntoDB = async (userData: JwtPayload, payload: IPodcast) => {
         payload.coverImage = getCloudFrontUrl(payload.coverImage);
     }
 
+    await assertValidSource(payload.sourcePodcast);
+
+    // Ownership is decided by the server, never by the request body:
+    //   superAdmin -> the platform station, creator -> the creator themself.
     if (userData.role == USER_ROLE.superAdmin) {
-        return await Podcast.create({ ...payload });
+        const station = await Station.findOne().select('_id').lean();
+        if (!station) {
+            throw new AppError(
+                httpStatus.CONFLICT,
+                'The platform station is not set up yet'
+            );
+        }
+        return await Podcast.create({
+            ...payload,
+            station: station._id,
+            creator: null,
+        });
     }
-    return await Podcast.create({ ...payload, creator: userId });
+
+    // Creators must be approved before they can publish.
+    const creator = await Creator.findById(userId).select('isApproved').lean();
+    if (!creator) {
+        throw new AppError(httpStatus.NOT_FOUND, 'Creator profile not found');
+    }
+    if (!creator.isApproved) {
+        throw new AppError(
+            httpStatus.FORBIDDEN,
+            'Your creator account is waiting for approval'
+        );
+    }
+    return await Podcast.create({ ...payload, creator: userId, station: null });
 };
 
 const updatePodcastIntoDB = async (
     userData: JwtPayload,
     id: string,
-    payload: Partial<IPodcast>
+    rawPayload: Partial<IPodcast>
 ) => {
+    const payload = pickEditable(rawPayload);
     if (userData.role == USER_ROLE.creator) {
         const userId = userData.profileId as string;
         const podcast = await Podcast.findOne({ _id: id, creator: userId });
         if (!podcast) {
             throw new AppError(httpStatus.NOT_FOUND, 'Podcast not found');
         }
+        await assertTypeRulesOnUpdate(podcast, payload);
 
         if (payload.podcast_url) {
             payload.podcast_url = getCloudFrontUrl(payload.podcast_url);
@@ -79,18 +217,24 @@ const updatePodcastIntoDB = async (
     } else {
         const podcast = await Podcast.findOne({
             _id: id,
-            station: { $ne: null },
-        });
+            // platform-owned: linked to the station, or legacy admin uploads with no creator
+            $or: [{ station: { $ne: null } }, { creator: null }],
+        }).setOptions(ADMIN_QUERY);
         if (!podcast) {
             throw new AppError(httpStatus.NOT_FOUND, 'Podcast not found');
         }
+        await assertTypeRulesOnUpdate(podcast, payload);
         if (payload.podcast_url) {
             payload.podcast_url = getCloudFrontUrl(payload.podcast_url);
+        }
+        if (payload.coverImage) {
+            payload.coverImage = getCloudFrontUrl(payload.coverImage);
         }
 
         const reuslt = await Podcast.findByIdAndUpdate(id, payload, {
             new: true,
             runValidators: true,
+            ...ADMIN_QUERY,
         });
 
         if (payload.podcast_url) {
@@ -105,21 +249,84 @@ const updatePodcastIntoDB = async (
     }
 };
 
+/**
+ * Adds `totalComments` and `totalBookmarks` to each podcast. These aren't stored on
+ * the podcast, so they're counted per page with two indexed group queries.
+ */
+const attachEngagementCounts = async <T extends { _id: any }>(docs: T[]) => {
+    if (!docs.length) return docs;
+    const ids = docs.map((d) => d._id);
+    const countBy = (Model: any) =>
+        Model.aggregate([
+            { $match: { podcast: { $in: ids } } },
+            { $group: { _id: '$podcast', n: { $sum: 1 } } },
+        ]).then(
+            (rows: { _id: any; n: number }[]) =>
+                new Map(rows.map((r) => [String(r._id), r.n]))
+        );
+    const [comments, bookmarks] = await Promise.all([
+        countBy(Comment),
+        countBy(Bookmark),
+    ]);
+    return docs.map((d) =>
+        Object.assign(d, {
+            totalComments: comments.get(String(d._id)) ?? 0,
+            totalBookmarks: bookmarks.get(String(d._id)) ?? 0,
+        })
+    );
+};
+
 const getAllPodcasts = async (
-    query: Record<string, any>
+    query: Record<string, any>,
+    options: { includeHidden?: boolean } = {}
 ): Promise<{ meta: any; result: any[] }> => {
-    const { page = 1, limit = 10, searchTerm = '' } = query;
+    const page = Math.max(Number(query.page) || 1, 1);
+    const limit = Math.min(Math.max(Number(query.limit) || 10, 1), 100);
+    const skip = (page - 1) * limit;
+    const searchTerm = escapeRegex(query.searchTerm).trim();
 
-    const skip = (Number(page) - 1) * Number(limit);
+    // Podcasts whose category/subcategory document was hard-deleted were always
+    // excluded (the old pipeline used a non-preserving $unwind). Keep that, but as
+    // an indexed match on the small category collections instead of a join.
+    const [categoryIds, subCategoryIds, creatorIds] = await Promise.all([
+        Category.distinct('_id'),
+        SubCategory.distinct('_id'),
+        searchTerm
+            ? Creator.find({ name: { $regex: searchTerm, $options: 'i' } })
+                  .select('_id')
+                  .limit(500)
+                  .lean()
+                  .then((rows) => rows.map((r) => r._id))
+            : Promise.resolve([]),
+    ]);
 
-    const matchStage: any = {};
-
-    // reels filter
-    if (query.reels) {
-        matchStage.duration = { $lte: 60 };
+    const match: Record<string, any> = {
+        category: { $in: categoryIds },
+        subCategory: { $in: subCategoryIds },
+    };
+    const typeFilter = typeFilterFromQuery(query);
+    if (typeFilter) match.$and = [typeFilter];
+    if (options.includeHidden && PODCAST_STATUS.includes(query.status)) {
+        match.status =
+            query.status === 'published' ? { $ne: 'hidden' } : 'hidden';
+    }
+    if (searchTerm) {
+        match.$or = [
+            { title: { $regex: searchTerm, $options: 'i' } },
+            { description: { $regex: searchTerm, $options: 'i' } },
+            ...(creatorIds.length ? [{ creator: { $in: creatorIds } }] : []),
+        ];
     }
 
-    const pipeline: any[] = [
+    // Filter → sort → page on the podcast's own (indexed) fields first, then join
+    // only the documents on this page (plain $lookup: works on every MongoDB
+    // version). Previously every podcast in the collection
+    // was joined with four other collections on every request.
+    const pagePipeline: PipelineStage[] = [
+        { $match: match },
+        { $sort: { createdAt: -1, _id: -1 } },
+        { $skip: skip },
+        { $limit: limit },
         {
             $lookup: {
                 from: 'creators',
@@ -138,16 +345,6 @@ const getAllPodcasts = async (
             },
         },
         { $unwind: '$category' },
-
-        {
-            $lookup: {
-                from: 'stations',
-                localField: 'station',
-                foreignField: '_id',
-                as: 'station',
-            },
-        },
-        { $unwind: { path: '$station', preserveNullAndEmptyArrays: true } },
         {
             $lookup: {
                 from: 'subcategories',
@@ -158,100 +355,57 @@ const getAllPodcasts = async (
         },
         { $unwind: '$subCategory' },
         {
-            $match: {
-                ...matchStage,
-                ...(searchTerm
-                    ? {
-                        $or: [
-                            { title: { $regex: searchTerm, $options: 'i' } },
-                            {
-                                description: {
-                                    $regex: searchTerm,
-                                    $options: 'i',
-                                },
-                            },
-                            { name: { $regex: searchTerm, $options: 'i' } }, // podcast name
-                            {
-                                'creator.name': {
-                                    $regex: searchTerm,
-                                    $options: 'i',
-                                },
-                            }, // creator name
-                        ],
-                    }
-                    : {}),
+            $lookup: {
+                from: 'stations',
+                localField: 'station',
+                foreignField: '_id',
+                as: 'station',
             },
         },
+        { $unwind: { path: '$station', preserveNullAndEmptyArrays: true } },
         {
-            $facet: {
-                meta: [{ $count: 'total' }],
-                result: [
-                    { $sort: { createdAt: -1 } }, // or use query.sort if provided
-                    { $skip: skip },
-                    { $limit: Number(limit) },
-                    {
-                        $project: {
-                            _id: 1,
-                            name: 1,
-                            title: 1,
-                            description: 1,
-                            coverImage: 1,
-                            podcast_url: 1,
-                            address: 1,
-                            tags: 1,
-                            totalView: 1,
-                            duration: 1,
-                            createdAt: 1,
-                            updatedAt: 1,
-                            location: 1,
-                            category: { _id: 1, name: 1 },
-                            subCategory: { _id: 1, name: 1 },
-                            station: { _id: 1, name: 1, profile_image: 1 },
-                            creator: {
-                                _id: 1,
-                                name: 1,
-                                profile_image: 1,
-                                donationLink: 1,
-                            },
-                        },
-                    },
-                ],
-            },
-        },
-        {
-            $addFields: {
-                meta: {
-                    $let: {
-                        vars: { m: { $arrayElemAt: ['$meta', 0] } },
-                        in: {
-                            page: Number(page),
-                            limit: Number(limit),
-                            total: { $ifNull: ['$$m.total', 0] },
-                            totalPage: {
-                                $ceil: {
-                                    $divide: [
-                                        { $ifNull: ['$$m.total', 0] },
-                                        Number(limit),
-                                    ],
-                                },
-                            },
-                        },
-                    },
+            $project: {
+                title: 1,
+                description: 1,
+                coverImage: 1,
+                podcast_url: 1,
+                mediaType: 1,
+                status: 1,
+                address: 1,
+                tags: 1,
+                totalView: 1,
+                totalLikes: 1,
+                duration: 1,
+                durationSeconds: 1,
+                type: 1,
+                sourcePodcast: 1,
+                createdAt: 1,
+                updatedAt: 1,
+                location: 1,
+                category: { _id: 1, name: 1 },
+                subCategory: { _id: 1, name: 1 },
+                station: { _id: 1, name: 1, profile_image: 1 },
+                creator: {
+                    _id: 1,
+                    name: 1,
+                    profile_image: 1,
+                    donationLink: 1,
                 },
             },
         },
     ];
 
-    const result = await Podcast.aggregate(pipeline);
+    const aggregateOptions = { includeHidden: options.includeHidden } as never;
+    const [total, result] = await Promise.all([
+        Podcast.countDocuments(match).setOptions({
+            includeHidden: options.includeHidden,
+        }),
+        Podcast.aggregate(pagePipeline).option(aggregateOptions),
+    ]);
 
     return {
-        meta: result[0]?.meta || {
-            page: Number(page),
-            limit: Number(limit),
-            total: 0,
-            totalPage: 0,
-        },
-        result: result[0]?.result || [],
+        meta: { page, limit, total, totalPage: Math.ceil(total / limit) },
+        result: await attachEngagementCounts(result),
     };
 };
 const getMyPodcasts = async (
@@ -269,11 +423,13 @@ const getMyPodcasts = async (
             return JSON.parse(cachedData);
         }
 
-        const filterQuery: any = {};
-        if (query.reels) {
-            filterQuery.duration = { $lte: 60 };
-            delete query.reels;
-        }
+        // Filters live under $and: QueryBuilder.search() adds its own $or, which
+        // would overwrite a top-level $or.
+        const filterQuery: any = { $and: [] };
+        const typeFilter = typeFilterFromQuery(query);
+        if (typeFilter) filterQuery.$and.push(typeFilter);
+        delete query.reels;
+        delete query.type;
 
         if (query.popular) {
             query.sort = '-totalView';
@@ -281,7 +437,10 @@ const getMyPodcasts = async (
         }
 
         const resultQuery = new QueryBuilder(
-            Podcast.find({ ...filterQuery, creator: profileId }).populate([
+            Podcast.find({
+                ...(filterQuery.$and.length ? filterQuery : {}),
+                creator: profileId,
+            }).populate([
                 { path: 'creator', select: 'name profile_image' },
                 { path: 'category', select: 'name' },
                 { path: 'subCategory', select: 'name' },
@@ -308,11 +467,13 @@ const getMyPodcasts = async (
 
         return dataToCache;
     } else {
-        const filterQuery: any = {};
-        if (query.reels) {
-            filterQuery.duration = { $lte: 60 };
-            delete query.reels;
-        }
+        // Filters live under $and: QueryBuilder.search() adds its own $or, which
+        // would overwrite a top-level $or.
+        const filterQuery: any = { $and: [] };
+        const typeFilter = typeFilterFromQuery(query);
+        if (typeFilter) filterQuery.$and.push(typeFilter);
+        delete query.reels;
+        delete query.type;
 
         if (query.popular) {
             query.sort = '-totalView';
@@ -320,9 +481,16 @@ const getMyPodcasts = async (
         }
 
         const resultQuery = new QueryBuilder(
-            Podcast.find({ ...filterQuery, station: { $ne: null } }).populate([
+            Podcast.find({
+                ...filterQuery,
+                $and: [
+                    ...filterQuery.$and,
+                    // platform podcasts: linked to the station, or legacy admin uploads
+                    { $or: [{ station: { $ne: null } }, { creator: null }] },
+                ],
+            }).populate([
                 // { path: 'creator', select: 'name profile_image' },
-                { path: 'station', select: 'name profile_image donationLink' },
+                { path: 'station', select: 'name profile_image donationUrl' },
                 { path: 'category', select: 'name' },
                 { path: 'subCategory', select: 'name' },
             ]),
@@ -334,7 +502,9 @@ const getMyPodcasts = async (
             .paginate()
             .sort();
 
-        const result = await resultQuery.modelQuery;
+        const result = (await resultQuery.modelQuery.lean()).map(
+            withStationDonationLink
+        );
         const meta = await resultQuery.countTotal();
         const dataToCache = { meta, result };
 
@@ -372,10 +542,8 @@ export const getPodcastFeedForUser = async (
         ? new Set(JSON.parse(cachedLikes))
         : new Set(
             (
-                await Podcast.find({ 'likers.user': userId })
-                    .select('_id')
-                    .lean()
-            ).map((l) => l._id.toString())
+                await Like.find({ user: userId }).select('podcast').lean()
+            ).map((l) => l.podcast.toString())
         );
 
     // Update Redis if empty
@@ -401,10 +569,11 @@ export const getPodcastFeedForUser = async (
         .populate('category', 'name')
         .populate('subCategory', 'name')
         .populate('creator', 'name donationLink profile_image')
-        .populate('station', 'name profile_image donationLink')
+        .populate('station', 'name profile_image donationUrl')
         .lean();
 
     if (!firstPodcast) throw new Error('First podcast not found');
+    withStationDonationLink(firstPodcast);
 
     // Step 2: Aggregate podcasts
     const buildFeedPipeline = (cursor?: string): mongoose.PipelineStage[] => [
@@ -500,9 +669,26 @@ export const getPodcastFeedForUser = async (
                 subCategory: { name: 1 },
                 location: 1,
                 duration: 1,
+                durationSeconds: 1,
+                type: 1,
+                mediaType: 1,
+                sourcePodcast: 1,
                 createdAt: 1,
                 creator: { name: 1, donationLink: 1, profile_image: 1 },
-                station: { name: 1, profile_image: 1, donationLink: 1 },
+                // Station stores `donationUrl`; expose it as `donationLink` like
+                // creators. $$REMOVE keeps `station` absent for creator podcasts.
+                station: {
+                    $cond: [
+                        { $ifNull: ['$station._id', false] },
+                        {
+                            _id: '$station._id',
+                            name: '$station.name',
+                            profile_image: '$station.profile_image',
+                            donationLink: '$station.donationUrl',
+                        },
+                        '$$REMOVE',
+                    ],
+                },
             },
         },
         { $limit: limit },
@@ -549,30 +735,75 @@ export const getPodcastFeedForUser = async (
     };
 };
 
-const getSinglePodcast = async (id: string) => {
-    const podcast = await Podcast.findById(id).populate([
-        {
-            path: 'creator',
-            select: 'name profile_image',
-        },
-        {
-            path: 'station',
-            select: 'name profile_image donationLink',
-        },
-        {
-            path: 'category',
-            select: 'name',
-        },
-        {
-            path: 'subCategory',
-            select: 'name',
-        },
-    ]);
+const getSinglePodcast = async (id: string, viewer?: JwtPayload | null) => {
+    const isAdmin = viewer?.role === USER_ROLE.superAdmin;
+    const podcast = await Podcast.findById(id)
+        .setOptions({ includeHidden: isAdmin })
+        .populate([
+            {
+                path: 'creator',
+                select: 'name profile_image',
+            },
+            {
+                path: 'station',
+                select: 'name profile_image donationUrl',
+            },
+            {
+                path: 'category',
+                select: 'name',
+            },
+            {
+                path: 'subCategory',
+                select: 'name',
+            },
+            {
+                // "Watch full message" for clips; null if hidden/deleted.
+                path: 'sourcePodcast',
+                select: 'title coverImage mediaType duration durationSeconds',
+            },
+        ])
+        // Legacy embedded array (removed by the likes migration) — never expose
+        // the full list of users who liked a podcast.
+        .select('-likers')
+        .lean();
     if (!podcast) {
         throw new AppError(httpStatus.NOT_FOUND, 'Podcast not found');
     }
 
-    return podcast;
+    // Personalised fields when the caller is signed in.
+    let isLike = false;
+    let isBookmark = false;
+    const profileId = viewer?.profileId;
+    if (profileId && mongoose.isValidObjectId(profileId)) {
+        const [like, bookmark] = await Promise.all([
+            Like.exists({ podcast: podcast._id, user: profileId }),
+            Bookmark.exists({ podcast: podcast._id, user: profileId }),
+        ]);
+        isLike = Boolean(like);
+        isBookmark = Boolean(bookmark);
+    }
+
+    withStationDonationLink(podcast);
+    await attachEngagementCounts([podcast]);
+    return {
+        ...podcast,
+        isLike,
+        isBookmark,
+        // Backward compatibility: older app builds derive "liked" from
+        // `likers.some(l => l.user === me)`. Only the viewer's own entry is
+        // returned, so that check keeps working without leaking other users.
+        likers: isLike
+            ? [
+                  {
+                      user: profileId,
+                      userType:
+                          viewer?.role === USER_ROLE.creator
+                              ? 'Creator'
+                              : 'NormalUser',
+                  },
+              ]
+            : [],
+    };
 };
 
 const deletePodcastFromDB = async (userData: JwtPayload, id: string) => {
@@ -590,12 +821,17 @@ const deletePodcastFromDB = async (userData: JwtPayload, id: string) => {
             const coverImageUrl = getCloudFrontUrl(podcast.coverImage);
             deleteFileFromS3(coverImageUrl);
         }
-        return await Podcast.findByIdAndDelete(id);
+        const deleted = await Podcast.findByIdAndDelete(id, ADMIN_QUERY);
+        await Promise.all([
+            Album.updateMany({ podcasts: id }, { $pull: { podcasts: id } }),
+            Like.deleteMany({ podcast: id }),
+        ]);
+        return deleted;
     } else {
         const podcast = await Podcast.findOne({
             _id: id,
-            station: { $ne: null },
-        });
+            $or: [{ station: { $ne: null } }, { creator: null }],
+        }).setOptions(ADMIN_QUERY);
         if (!podcast) {
             throw new AppError(httpStatus.NOT_FOUND, 'Podcast not found');
         }
@@ -607,7 +843,12 @@ const deletePodcastFromDB = async (userData: JwtPayload, id: string) => {
             const coverImageUrl = getCloudFrontUrl(podcast.coverImage);
             deleteFileFromS3(coverImageUrl);
         }
-        return await Podcast.findByIdAndDelete(id);
+        const deleted = await Podcast.findByIdAndDelete(id, ADMIN_QUERY);
+        await Promise.all([
+            Album.updateMany({ podcasts: id }, { $pull: { podcasts: id } }),
+            Like.deleteMany({ podcast: id }),
+        ]);
+        return deleted;
     }
 };
 
@@ -656,7 +897,8 @@ const getHomeData = async () => {
             .sort({ totalView: -1 })
             .limit(10)
             .lean(),
-        Podcast.find({ duration: { $lte: 120 } })
+        // Home "Preach Clips" row (legacy records: previous 120 rule)
+        Podcast.find(clipFilter(120))
             .populate({ path: 'category', select: 'name' })
             .populate('subCategory', 'name')
             .populate('creator', 'name profile_image')
@@ -665,7 +907,6 @@ const getHomeData = async () => {
             .limit(10)
             .lean(),
         Album.find().sort({ updatedAt: -1 }).limit(10).lean(),
-
 
         Creator.aggregate([
             // Lookup active live session
@@ -915,34 +1156,111 @@ const getPodcastForSubcategories = async (categoryId: string) => {
 };
 
 const toggleLikePodcast = async (podcastId: string, userData: JwtPayload) => {
-    const userId = userData.profileId;
+    const profileId = userData.profileId as string;
+    if (!mongoose.isValidObjectId(podcastId)) {
+        throw new AppError(httpStatus.BAD_REQUEST, 'Invalid podcast id');
+    }
     const userType =
         userData.role == USER_ROLE.creator ? 'Creator' : 'NormalUser';
-    const podcast = await Podcast.findById(podcastId);
-    if (!podcast) {
-        throw new Error('Podcast not found');
+    const podcastObjectId = new mongoose.Types.ObjectId(podcastId);
+    const userObjectId = new mongoose.Types.ObjectId(profileId);
+
+    const exists = await Podcast.exists({ _id: podcastObjectId });
+    if (!exists) {
+        throw new AppError(httpStatus.NOT_FOUND, 'Podcast not found');
     }
 
-    const userObjectId = new mongoose.Types.ObjectId(userId);
+    // Unlike: a single atomic delete tells us whether a like existed.
+    const removed = await Like.deleteOne({
+        podcast: podcastObjectId,
+        user: userObjectId,
+    });
 
-    const isLiked = podcast.likers.some(
-        (liker: any) =>
-            liker.user.equals(userObjectId) && liker.userType === userType
-    );
-
-    if (isLiked) {
-        await Podcast.findByIdAndUpdate(podcastId, {
-            $pull: { likers: { user: userObjectId, userType } },
-            $inc: { totalLikes: -1 },
-        });
-        return { isLike: false };
+    let isLike: boolean;
+    if (removed.deletedCount === 1) {
+        await Podcast.updateOne(
+            { _id: podcastObjectId, totalLikes: { $gt: 0 } },
+            { $inc: { totalLikes: -1 } }
+        );
+        isLike = false;
     } else {
-        await Podcast.findByIdAndUpdate(podcastId, {
-            $push: { likers: { user: userObjectId, userType } },
-            $inc: { totalLikes: 1 },
-        });
-        return { isLike: true };
+        // Transitional: a like stored in the legacy embedded array (before the
+        // likes migration has run) is still an existing like -> unlike it.
+        const legacy = await Podcast.collection.updateOne(
+            { _id: podcastObjectId, 'likers.user': userObjectId },
+            {
+                $pull: { likers: { user: userObjectId } },
+                $inc: { totalLikes: -1 },
+            } as never
+        );
+        if (legacy.modifiedCount === 1) {
+            isLike = false;
+        } else {
+            try {
+                await Like.create({
+                    podcast: podcastObjectId,
+                    user: userObjectId,
+                    userType,
+                });
+                await Podcast.updateOne(
+                    { _id: podcastObjectId },
+                    { $inc: { totalLikes: 1 } }
+                );
+            } catch (err: any) {
+                // Duplicate key: a concurrent request already liked it. The end
+                // state (liked) is what the user asked for, and the counter was
+                // incremented exactly once by the request that won.
+                if (err?.code !== 11000) throw err;
+            }
+            isLike = true;
+        }
     }
+
+    // The feed caches each user's liked ids for 10 minutes.
+    await deleteKeys(userCacheKeys.likes(profileId));
+    return { isLike };
+};
+
+/**
+ * Deletes every podcast owned by a creator (files, likes, bookmarks, album refs).
+ * Called when a creator account is deleted or rejected: otherwise their podcasts
+ * stay public with a dangling `creator` reference that nobody can edit or delete.
+ */
+const deleteAllPodcastsOfCreator = async (creatorId: string) => {
+    const podcasts = await Podcast.find({ creator: creatorId })
+        .setOptions(ADMIN_QUERY)
+        .select('podcast_url coverImage')
+        .lean();
+    if (!podcasts.length) return 0;
+    const ids = podcasts.map((p) => p._id);
+
+    await Promise.all([
+        Podcast.deleteMany({ _id: { $in: ids } }),
+        Like.deleteMany({ podcast: { $in: ids } }),
+        Bookmark.deleteMany({ podcast: { $in: ids } }),
+        Album.updateMany(
+            { podcasts: { $in: ids } },
+            { $pull: { podcasts: { $in: ids } } }
+        ),
+    ]);
+    // File cleanup is best-effort and must not block the account deletion.
+    podcasts.forEach((p) => {
+        if (p.podcast_url) deleteFileFromS3(getCloudFrontUrl(p.podcast_url));
+        if (p.coverImage) deleteFileFromS3(getCloudFrontUrl(p.coverImage));
+    });
+    await deleteKeys('home:data');
+    return podcasts.length;
+};
+
+/** Admin moderation: hide a podcast from the apps without deleting it. */
+const setPodcastStatus = async (id: string, status: TPodcastStatus) => {
+    const result = await Podcast.findByIdAndUpdate(
+        id,
+        { status },
+        { new: true, runValidators: true, ...ADMIN_QUERY }
+    );
+    if (!result) throw new AppError(httpStatus.NOT_FOUND, 'Podcast not found');
+    return result;
 };
 
 const globalSearch = async (params: any) => {
@@ -1177,6 +1495,8 @@ const podcastService = {
     getPodcastForSubcategories,
     getMyPodcasts,
     toggleLikePodcast,
+    setPodcastStatus,
+    deleteAllPodcastsOfCreator,
     globalSearch,
 };
 

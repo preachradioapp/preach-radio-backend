@@ -16,6 +16,14 @@ const updateSuperAdminProfile = async (
             'You can not change the email'
         );
     }
+    // Whitelist editable fields to prevent mass assignment (e.g. `user`).
+    payload = Object.fromEntries(
+        Object.entries({
+            name: payload.name,
+            phone: payload.phone,
+            profile_image: payload.profile_image,
+        }).filter(([, v]) => v !== undefined)
+    ) as Partial<ISuperAdmin>;
     if (userData.role == USER_ROLE.admin) {
         const user = await Admin.findById(userData.profileId);
         if (!user) {

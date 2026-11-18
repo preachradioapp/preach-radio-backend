@@ -5,6 +5,7 @@ import { getCloudFrontUrl } from '../../helper/mutler-s3-uploader';
 import catchAsync from '../../utilities/catchasync';
 import sendResponse from '../../utilities/sendResponse';
 import podcastService from './podcast.service';
+import { USER_ROLE } from '../user/user.constant';
 
 const createPodcast = catchAsync(async (req, res) => {
     const result = await podcastService.createPodcastIntoDB(req.user, req.body);
@@ -35,7 +36,13 @@ const updatePodcast = catchAsync(async (req, res) => {
 });
 
 const getAllPodcasts = catchAsync(async (req, res) => {
-    const result = await podcastService.getAllPodcasts(req.query);
+    // Admins may include hidden podcasts (dashboard moderation view).
+    const includeHidden =
+        req.user?.role === USER_ROLE.superAdmin &&
+        req.query.includeHidden === 'true';
+    const result = await podcastService.getAllPodcasts(req.query, {
+        includeHidden,
+    });
     sendResponse(res, {
         statusCode: httpStatus.OK,
         success: true,
@@ -45,10 +52,9 @@ const getAllPodcasts = catchAsync(async (req, res) => {
 });
 
 const getMyPodcasts = catchAsync(async (req, res) => {
-    const result = await podcastService.getMyPodcasts(
-        req.user.profileId,
-        req.query
-    );
+    // Must be the whole JWT payload: the service branches on `role`. Passing only
+    // the profile id meant creators always received the station's podcasts.
+    const result = await podcastService.getMyPodcasts(req.user, req.query);
     sendResponse(res, {
         statusCode: httpStatus.OK,
         success: true,
@@ -71,7 +77,19 @@ const getPodcastFeedForUser = catchAsync(async (req, res) => {
 });
 
 const getSinglePodcast = catchAsync(async (req, res) => {
-    const result = await podcastService.getSinglePodcast(req.params.id);
+    const result = await podcastService.getSinglePodcast(
+        req.params.id,
+        req.user
+    );
+    // Signed-in responses contain personal fields (isLike/isBookmark): they
+    // must never be stored by shared caches/CDNs.
+    res.setHeader(
+        'Cache-Control',
+        req.user
+            ? 'private, max-age=0, must-revalidate'
+            : 'public, max-age=60, stale-while-revalidate=30'
+    );
+    res.setHeader('Vary', 'Authorization');
 
     const eTag = generateETag(result);
 
@@ -157,7 +175,24 @@ const globalSearch = catchAsync(async (req, res) => {
     });
 });
 
+const setPodcastStatus = catchAsync(async (req, res) => {
+    const result = await podcastService.setPodcastStatus(
+        req.params.id,
+        req.body.status
+    );
+    sendResponse(res, {
+        statusCode: httpStatus.OK,
+        success: true,
+        message:
+            result.status === 'hidden'
+                ? 'Podcast hidden from the app'
+                : 'Podcast published',
+        data: result,
+    });
+});
+
 const podcastController = {
+    setPodcastStatus,
     createPodcast,
     updatePodcast,
     getAllPodcasts,

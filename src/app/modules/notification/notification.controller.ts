@@ -29,7 +29,8 @@ const seeNotification = catchAsync(async (req, res) => {
 const deleteNoficiation = catchAsync(async (req, res) => {
     const result = await notificationService.deleteNoficiation(
         req.params.id,
-        req?.user.profileId
+        req?.user.profileId,
+        req?.user.role
     );
 
     sendResponse(res, {

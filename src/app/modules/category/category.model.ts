@@ -1,6 +1,6 @@
 import { model, Schema } from 'mongoose';
 import { ICategory } from './category.interface';
-import redis from '../../utilities/redisClient';
+import { deleteByPattern } from '../../utilities/cache';
 
 const CategorySchema: Schema = new Schema<ICategory>(
     {
@@ -17,10 +17,7 @@ const CategorySchema: Schema = new Schema<ICategory>(
 );
 
 const deleteAllCreatorCache = async () => {
-    const keys = await redis.keys('categories:*');
-    if (keys.length > 0) {
-        await redis.del(...keys);
-    }
+    await deleteByPattern('categories:*');
 };
 
 CategorySchema.post('save', deleteAllCreatorCache);

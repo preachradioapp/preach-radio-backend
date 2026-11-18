@@ -3,29 +3,25 @@ import AppError from '../../error/appError';
 import Podcast from '../podcast/podcast.model';
 import Bookmark from './bookmark.model';
 import QueryBuilder from '../../builder/QueryBuilder';
+import { deleteKeys, userCacheKeys } from '../../utilities/cache';
 
 const bookmarkAddDelete = async (profileId: string, podcastId: string) => {
-    const podcast = await Podcast.findById(podcastId);
+    const podcast = await Podcast.exists({ _id: podcastId });
     if (!podcast) {
         throw new AppError(httpStatus.NOT_FOUND, 'Podcast not found');
     }
-    const bookmark = await Bookmark.findOne({
+    // One atomic delete tells us whether the bookmark existed.
+    const removed = await Bookmark.findOneAndDelete({
         user: profileId,
         podcast: podcastId,
     });
-    if (bookmark) {
-        await Bookmark.findOneAndDelete({
-            user: profileId,
-            podcast: podcastId,
-        });
-        return null;
-    } else {
-        const result = await Bookmark.create({
-            user: profileId,
-            podcast: podcastId,
-        });
-        return result;
-    }
+    const result = removed
+        ? null
+        : await Bookmark.create({ user: profileId, podcast: podcastId });
+
+    // The podcast feed caches each user's bookmarked ids for 10 minutes.
+    await deleteKeys(userCacheKeys.bookmarks(profileId));
+    return result;
 };
 
 // get bookmark from db

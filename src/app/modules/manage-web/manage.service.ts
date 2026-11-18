@@ -17,7 +17,7 @@ import AppError from '../../error/appError';
 const addPrivacyPolicy = async (payload: any) => {
     const checkIsExist = await PrivacyPolicy.findOne();
     if (checkIsExist) {
-        await PrivacyPolicy.findOneAndUpdate({}, payload, {
+        return await PrivacyPolicy.findOneAndUpdate({}, payload, {
             new: true,
 
             runValidators: true,
@@ -54,7 +54,7 @@ const deletePrivacyPolicy = async (id: string) => {
 const addPartner = async (payload: any) => {
     const checkIsExist = await Partner.findOne();
     if (checkIsExist) {
-        await Partner.findOneAndUpdate({}, payload, {
+        return await Partner.findOneAndUpdate({}, payload, {
             new: true,
 
             runValidators: true,
@@ -88,7 +88,7 @@ const deletePartner = async (id: string) => {
 const addAboutUs = async (payload: any) => {
     const checkIsExist = await AboutUs.findOne();
     if (checkIsExist) {
-        await AboutUs.findOneAndUpdate({}, payload, {
+        return await AboutUs.findOneAndUpdate({}, payload, {
             new: true,
 
             runValidators: true,
@@ -122,7 +122,7 @@ const deleteAboutUs = async (id: string) => {
 const addTermsConditions = async (payload: any) => {
     const checkIsExist = await TermsConditions.findOne();
     if (checkIsExist) {
-        await TermsConditions.findOneAndUpdate({}, payload, {
+        return await TermsConditions.findOneAndUpdate({}, payload, {
             new: true,
 
             runValidators: true,

@@ -48,7 +48,10 @@ const updateUserProfile = catchAsync(async (req, res) => {
 });
 
 const changeUserStatus = catchAsync(async (req, res) => {
-    const result = await userServices.changeUserStatus(req.params.id);
+    const result = await userServices.changeUserStatus(
+        req.params.id,
+        req.user?.id
+    );
 
     sendResponse(res, {
         statusCode: httpStatus.OK,
@@ -93,7 +96,10 @@ const deleteUserAccount = catchAsync(async (req, res) => {
     });
 });
 const deleteUserByAdmin = catchAsync(async (req, res) => {
-    const result = await userServices.deleteUserByAdmin(req.params.id);
+    const result = await userServices.deleteUserByAdmin(
+        req.params.id,
+        req.user?.id
+    );
 
     sendResponse(res, {
         statusCode: httpStatus.OK,

@@ -1,4 +1,5 @@
 import { FilterQuery, Query } from 'mongoose';
+import { escapeRegex, sanitizeFilter } from '../helper/sanitizeQuery';
 
 class QueryBuilder<T> {
   public modelQuery: Query<T[], T>;
@@ -8,7 +9,7 @@ class QueryBuilder<T> {
     this.query = query;
   }
   search(searchableFields: string[]) {
-    const searchTerm = this?.query?.searchTerm;
+    const searchTerm = escapeRegex(this?.query?.searchTerm).trim();
     if (searchTerm) {
       this.modelQuery = this?.modelQuery.find({
         $or: searchableFields.map(
@@ -25,7 +26,9 @@ class QueryBuilder<T> {
     const queryObj = { ...this.query }; // copy the query
     const excludeFields = ['searchTerm', 'sort', 'limit', 'page', 'fields'];
     excludeFields.forEach((el) => delete queryObj[el]);
-    this.modelQuery = this.modelQuery.find(queryObj as FilterQuery<T>);
+    this.modelQuery = this.modelQuery.find(
+      sanitizeFilter(queryObj) as FilterQuery<T>,
+    );
     return this;
   }
   // sort() {
@@ -41,7 +44,7 @@ class QueryBuilder<T> {
     if (sortField) {
       // Check if the sortField starts with '-' (indicating descending order)
       const order = sortField.startsWith('-') ? -1 : 1;
-      const fieldName = sortField.replace('-', '');
+      const fieldName = sortField.replace('-', '').replace(/[^\w]/g, '');
 
       // Dynamic sorting based on any field provided in the query
       this.modelQuery = this.modelQuery.sort({

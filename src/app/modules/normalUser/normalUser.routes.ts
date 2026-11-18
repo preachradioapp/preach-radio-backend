@@ -23,7 +23,8 @@ router.patch(
 );
 router.get(
     '/get-all-user',
-    // auth(USER_ROLE.superAdmin, USER_ROLE.admin, USER_ROLE.user),
+    // Exposes user PII (email, phone, address) — never public.
+    auth(USER_ROLE.superAdmin, USER_ROLE.admin, USER_ROLE.user),
     NormalUserController.getAllUser
 );
 

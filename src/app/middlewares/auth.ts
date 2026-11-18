@@ -76,9 +76,11 @@ const auth = (...requiredRoles: TUserRole[]) => {
                 }
             }
             if (requiredRoles && !requiredRoles.includes(user.role)) {
+                // Authenticated but lacking the role: 403, not 401, so clients
+                // don't treat it as an expired session.
                 throw new AppError(
-                    httpStatus.UNAUTHORIZED,
-                    'Your are not authorized 3'
+                    httpStatus.FORBIDDEN,
+                    'You do not have permission to perform this action'
                 );
             }
             // add those properties in req, using the role currently stored

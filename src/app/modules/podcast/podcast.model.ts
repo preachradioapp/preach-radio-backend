@@ -2,6 +2,7 @@ import { PipelineStage, Query, Schema, model } from 'mongoose';
 import { deleteByPattern, deleteKeys } from '../../utilities/cache';
 import {
     IPodcast,
+    MEDIA_PROCESSING_STATUS,
     PODCAST_MEDIA_TYPES,
     PODCAST_STATUS,
     PODCAST_TYPES,
@@ -21,6 +22,20 @@ const PointSchema = new Schema(
     {
         type: { type: String, enum: ['Point'], default: 'Point' },
         coordinates: { type: [Number], required: true },
+    },
+    { _id: false }
+);
+
+const ProcessingSchema = new Schema(
+    {
+        status: { type: String, enum: MEDIA_PROCESSING_STATUS, required: true },
+        jobId: { type: String, default: null },
+        runId: { type: String, default: null },
+        error: { type: String, default: null },
+        attempts: { type: Number, default: 0, min: 0 },
+        startedAt: { type: Date, default: null },
+        completedAt: { type: Date, default: null },
+        updatedAt: { type: Date, default: Date.now },
     },
     { _id: false }
 );
@@ -55,6 +70,11 @@ const PodcastSchema = new Schema<IPodcast>(
         // Optional: apps/dashboard may publish without a cover and show a placeholder.
         coverImage: { type: String },
         podcast_url: { type: String },
+        // Set by the server when MediaConvert finishes; never by clients.
+        hlsUrl: { type: String, default: null },
+        processing: { type: ProcessingSchema, default: null },
+        videoWidth: { type: Number, min: 1, default: null },
+        videoHeight: { type: Number, min: 1, default: null },
         mediaType: {
             type: String,
             enum: PODCAST_MEDIA_TYPES,
@@ -148,6 +168,12 @@ PodcastSchema.index({ subCategory: 1, createdAt: -1 }); // browse by subcategory
 PodcastSchema.index({ type: 1, createdAt: -1 }); // reels / clips feed
 PodcastSchema.index({ duration: 1 }); // legacy reels rule for untyped records
 PodcastSchema.index({ totalView: -1 }); // popular / trending
+// The media sweeper looks for unfinished conversions; documents without
+// `processing` are left out of the index.
+PodcastSchema.index(
+    { 'processing.status': 1, 'processing.updatedAt': 1 },
+    { partialFilterExpression: { 'processing.status': { $exists: true } } }
+);
 // Unchanged from before on purpose: MongoDB allows one text index per collection and
 // changing its definition would conflict with the existing index in production.
 PodcastSchema.index({ title: 'text', name: 'text', description: 'text' });

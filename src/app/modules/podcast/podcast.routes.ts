@@ -34,6 +34,12 @@ router.patch(
 router.get('/all', simpleAuth, podcastController.getAllPodcasts);
 
 // Admin moderation: hide / publish a podcast without deleting it.
+// Admin: (re)convert a podcast's media to HLS — retry after a failure, or re-run.
+router.post(
+    '/reprocess/:id',
+    auth(USER_ROLE.superAdmin),
+    podcastController.reprocessPodcast
+);
 router.patch(
     '/status/:id',
     auth(USER_ROLE.superAdmin),

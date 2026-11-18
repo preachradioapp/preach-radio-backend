@@ -1,4 +1,6 @@
 {
+  // ts-node (tests, scripts) loads the project's global types too, e.g. `req.user`.
+  "ts-node": { "files": true },
   "include": ["src"], // which files to compile
   "exclude": ["node_modules", "src/**/*.test.ts"], // which files to skip
   "compilerOptions": {

@@ -357,6 +357,7 @@ const getTopCreators = async (query: Record<string, unknown>) => {
                     title: '$latestPodcast.title',
                     description: '$latestPodcast.description',
                     podcast_url: '$latestPodcast.podcast_url',
+                    hlsUrl: '$latestPodcast.hlsUrl',
                     coverImage: '$latestPodcast.coverImage',
                 },
             },

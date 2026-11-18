@@ -14,6 +14,7 @@ import { metaRoutes } from '../modules/meta/meta.routes';
 import { normalUserRoutes } from '../modules/normalUser/normalUser.routes';
 import { notificationRoutes } from '../modules/notification/notification.routes';
 import { podcastPlaylistRoutes } from '../modules/playlist/playlist.routes';
+import { mediaWebhookRoutes } from '../modules/media/media.routes';
 import { podcastRoutes } from '../modules/podcast/podcast.routes';
 import { reportRoutes } from '../modules/report/report.routes';
 import { stationRoutes } from '../modules/station/station.routes';
@@ -114,6 +115,11 @@ const moduleRoutes = [
     {
         path: '/station',
         router: stationRoutes,
+    },
+    {
+        // AWS EventBridge → MediaConvert job results (secret-header auth).
+        path: '/webhooks',
+        router: mediaWebhookRoutes,
     },
 ];
 

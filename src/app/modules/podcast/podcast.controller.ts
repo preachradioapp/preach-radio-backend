@@ -5,6 +5,7 @@ import { getCloudFrontUrl } from '../../helper/mutler-s3-uploader';
 import catchAsync from '../../utilities/catchasync';
 import sendResponse from '../../utilities/sendResponse';
 import podcastService from './podcast.service';
+import mediaService from '../media/media.service';
 import { USER_ROLE } from '../user/user.constant';
 
 const createPodcast = catchAsync(async (req, res) => {
@@ -175,6 +176,19 @@ const globalSearch = catchAsync(async (req, res) => {
     });
 });
 
+const reprocessPodcast = catchAsync(async (req, res) => {
+    const result = await mediaService.reprocessPodcast(req.params.id);
+    sendResponse(res, {
+        statusCode: httpStatus.OK,
+        success: true,
+        message:
+            result?.processing?.status === 'processing'
+                ? 'Conversion started'
+                : 'Conversion could not start — see processing.error',
+        data: result,
+    });
+});
+
 const setPodcastStatus = catchAsync(async (req, res) => {
     const result = await podcastService.setPodcastStatus(
         req.params.id,
@@ -193,6 +207,7 @@ const setPodcastStatus = catchAsync(async (req, res) => {
 
 const podcastController = {
     setPodcastStatus,
+    reprocessPodcast,
     createPodcast,
     updatePodcast,
     getAllPodcasts,

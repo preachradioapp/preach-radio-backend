@@ -50,6 +50,20 @@ const podcastBody = z.object({
         .int('durationSeconds must be whole seconds')
         .nonnegative('durationSeconds cannot be negative')
         .optional(),
+    // Optional video size as displayed (rotation applied). Lets the server pick the
+    // HLS ladder's orientation; without it clips are assumed vertical.
+    videoWidth: z.coerce
+        .number({ invalid_type_error: 'videoWidth must be a number' })
+        .int('videoWidth must be whole pixels')
+        .positive('videoWidth must be positive')
+        .max(16384, 'videoWidth is too large')
+        .optional(),
+    videoHeight: z.coerce
+        .number({ invalid_type_error: 'videoHeight must be a number' })
+        .int('videoHeight must be whole pixels')
+        .positive('videoHeight must be positive')
+        .max(16384, 'videoHeight is too large')
+        .optional(),
 });
 
 type TPodcastBody = Partial<z.infer<typeof podcastBody>>;

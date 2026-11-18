@@ -43,6 +43,26 @@ Errors return `400` with a readable message, e.g. `"Clips can be at most 2 minut
 2. Send `durationSeconds` for episodes too. It is the unambiguous length and will replace `duration` once the old format question below is settled.
 3. Optionally show "Watch full message" when a clip has a `sourcePodcast`.
 
+## New: adaptive streaming (HLS)
+
+Every uploaded video or audio file is now converted on the server (AWS MediaConvert) into an HLS stream. Long sermons start almost immediately and adapt to the listener's connection. Video is converted to **480p and 720p** and audio to a single AAC stream. The original upload is kept and keeps working.
+
+**New fields on every podcast response** (lists, detail, albums, history, creator feed):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `hlsUrl` | string \| null | The stream to play (`…/master.m3u8`). `null` while converting, if conversion failed, and for podcasts uploaded before this change. |
+| `processing.status` | `"queued" \| "processing" \| "ready" \| "failed" \| "skipped"` \| absent | Conversion state. Absent (or `processing: null`) = never converted. |
+| `videoWidth`, `videoHeight` | number \| null | Video size as displayed. Useful to size the player (e.g. 9:16 for vertical clips) before it loads. |
+
+**What the app must do**
+1. **Play `hlsUrl` when it is present, otherwise `podcast_url`.** Both play in the native players: iOS AVPlayer, Android ExoPlayer/Media3, `react-native-video`, Flutter `video_player`, `react-native-track-player` (`type: 'hls'`). This is the same rule for video and audio.
+2. While `processing.status` is `"queued"` or `"processing"`, the podcast still plays from `podcast_url`; no special UI is required. Optionally show a small "Optimizing…" hint to the creator who uploaded it.
+3. **Recommended, creator upload:** send the picked video's displayed size as `videoWidth` and `videoHeight` (whole pixels) in `POST /podcast/create` (and `PATCH /podcast/update/:id` when replacing the file). The server uses it to keep vertical videos sharp. Without it, clips are assumed vertical and episodes horizontal.
+4. A video uploaded without a cover now gets an automatic cover (a frame from the video) once conversion finishes, so `coverImage` may appear later than the upload.
+
+**Old app versions keep working unchanged**: they ignore the new fields and play `podcast_url`.
+
 ## No action needed (behaviour fixes)
 
 - **Likes** are stored in a new `likes` collection. `POST /podcast/like-unlike/:id` keeps the same response (`{ isLike }`), but rapid double-taps can no longer double-count, and `totalLikes` stays exact.
@@ -70,3 +90,13 @@ Errors return `400` with a readable message, e.g. `"Clips can be at most 2 minut
    node dist/scripts/migrate-podcast-likes.js
    ```
    Until it runs, older likes still work for like/unlike, but don't show as "liked" in the feed.
+3. HLS conversion (needs the AWS setup in "Preach Radio – AWS Media Streaming Setup Guide"):
+   1. Add to the server `.env`: `MEDIACONVERT_REGION=us-east-1`, `MEDIACONVERT_ROLE_ARN`, `MEDIA_WEBHOOK_SECRET`, and `TRANSCODE_ENABLED=false`. Recreate the container (`docker restart` does not reload `--env-file`).
+   2. Set `TRANSCODE_ENABLED=true`, recreate the container, upload one short test video from the dashboard, and confirm it turns from "Processing" to playable within a few minutes.
+   3. Convert existing podcasts, newest first, in small batches (each minute of video is billed per rendition):
+      ```bash
+      node dist/scripts/transcode-existing.js --dry-run          # what would be converted
+      node dist/scripts/transcode-existing.js --limit=20
+      node dist/scripts/transcode-existing.js --type=clip --limit=100
+      ```
+   A failed conversion can be retried from the dashboard (the **Retry** button in the player) or with `POST /podcast/reprocess/:id` (superAdmin).

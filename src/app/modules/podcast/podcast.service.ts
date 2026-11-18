@@ -25,6 +25,8 @@ import { Station } from '../station/station.model';
 import { escapeRegex } from '../../helper/sanitizeQuery';
 import { clipFilter, typeFilterFromQuery } from './podcast.constant';
 import { typeRuleViolations } from './podcast.validation';
+import mediaService, { s3KeyFromUrl } from '../media/media.service';
+import { errorLogger } from '../../shared/logger';
 /** Fields a client may set. Counters, ownership and moderation status are server-controlled. */
 const EDITABLE_FIELDS = [
     'category',
@@ -41,6 +43,8 @@ const EDITABLE_FIELDS = [
     'durationSeconds',
     'type',
     'sourcePodcast',
+    'videoWidth',
+    'videoHeight',
 ] as const;
 
 const pickEditable = (payload: Partial<IPodcast>) => {
@@ -123,6 +127,43 @@ const assertTypeRulesOnUpdate = async (
     }
 };
 
+/**
+ * Starts converting the podcast's (new) media file and returns the podcast as it
+ * now stands. Conversion problems never fail the upload: the original
+ * `podcast_url` keeps playing and the failure is recorded on `processing`.
+ */
+const startMediaConversion = async <T extends { _id: unknown }>(doc: T) => {
+    try {
+        const updated = await mediaService.startTranscode(String(doc._id), {
+            reset: true,
+        });
+        return (updated as unknown as T) ?? doc;
+    } catch (err) {
+        errorLogger.error(`Could not start media conversion for ${doc._id}:`, err);
+        return doc;
+    }
+};
+
+/**
+ * Fields to clear when the media file is replaced: the old stream, its status,
+ * its size (unless the new upload sent one) and an auto-generated poster cover.
+ */
+const mediaReplacementFields = (
+    podcast: { _id: unknown; coverImage?: string | null },
+    payload: Partial<IPodcast>
+) => {
+    const fields: Record<string, unknown> = { hlsUrl: null, processing: null };
+    if (payload.videoWidth === undefined) {
+        fields.videoWidth = null;
+        fields.videoHeight = null;
+    }
+    const coverKey = s3KeyFromUrl(podcast.coverImage);
+    if (!payload.coverImage && coverKey?.startsWith(`media/${podcast._id}/`)) {
+        fields.coverImage = null;
+    }
+    return fields;
+};
+
 const createPodcastIntoDB = async (
     userData: JwtPayload,
     rawPayload: IPodcast
@@ -161,11 +202,12 @@ const createPodcastIntoDB = async (
                 'The platform station is not set up yet'
             );
         }
-        return await Podcast.create({
+        const created = await Podcast.create({
             ...payload,
             station: station._id,
             creator: null,
         });
+        return startMediaConversion(created);
     }
 
     // Creators must be approved before they can publish.
@@ -179,7 +221,12 @@ const createPodcastIntoDB = async (
             'Your creator account is waiting for approval'
         );
     }
-    return await Podcast.create({ ...payload, creator: userId, station: null });
+    const created = await Podcast.create({
+        ...payload,
+        creator: userId,
+        station: null,
+    });
+    return startMediaConversion(created);
 };
 
 const updatePodcastIntoDB = async (
@@ -199,21 +246,30 @@ const updatePodcastIntoDB = async (
         if (payload.podcast_url) {
             payload.podcast_url = getCloudFrontUrl(payload.podcast_url);
         }
+        const mediaChanged = Boolean(
+            payload.podcast_url && payload.podcast_url !== podcast.podcast_url
+        );
 
-        const reuslt = await Podcast.findByIdAndUpdate(id, payload, {
-            new: true,
-            runValidators: true,
-        });
+        const reuslt = await Podcast.findByIdAndUpdate(
+            id,
+            mediaChanged
+                ? { ...payload, ...mediaReplacementFields(podcast, payload) }
+                : payload,
+            { new: true, runValidators: true }
+        );
 
-        if (payload.podcast_url) {
+        if (mediaChanged) {
             deleteFileFromS3(podcast?.podcast_url as string);
+            mediaService.deleteMediaFolder(id);
         }
 
         if (payload.coverImage && podcast?.coverImage) {
             deleteFileFromS3(podcast?.coverImage);
         }
 
-        return reuslt;
+        return mediaChanged && reuslt
+            ? startMediaConversion(reuslt)
+            : reuslt;
     } else {
         const podcast = await Podcast.findOne({
             _id: id,
@@ -231,21 +287,30 @@ const updatePodcastIntoDB = async (
             payload.coverImage = getCloudFrontUrl(payload.coverImage);
         }
 
-        const reuslt = await Podcast.findByIdAndUpdate(id, payload, {
-            new: true,
-            runValidators: true,
-            ...ADMIN_QUERY,
-        });
+        const mediaChanged = Boolean(
+            payload.podcast_url && payload.podcast_url !== podcast.podcast_url
+        );
 
-        if (payload.podcast_url) {
+        const reuslt = await Podcast.findByIdAndUpdate(
+            id,
+            mediaChanged
+                ? { ...payload, ...mediaReplacementFields(podcast, payload) }
+                : payload,
+            { new: true, runValidators: true, ...ADMIN_QUERY }
+        );
+
+        if (mediaChanged) {
             deleteFileFromS3(podcast?.podcast_url as string);
+            mediaService.deleteMediaFolder(id);
         }
 
         if (payload.coverImage && podcast?.coverImage) {
             deleteFileFromS3(podcast?.coverImage);
         }
 
-        return reuslt;
+        return mediaChanged && reuslt
+            ? startMediaConversion(reuslt)
+            : reuslt;
     }
 };
 
@@ -369,6 +434,10 @@ const getAllPodcasts = async (
                 description: 1,
                 coverImage: 1,
                 podcast_url: 1,
+                hlsUrl: 1,
+                'processing.status': 1,
+                videoWidth: 1,
+                videoHeight: 1,
                 mediaType: 1,
                 status: 1,
                 address: 1,
@@ -665,6 +734,10 @@ export const getPodcastFeedForUser = async (
                 title: 1,
                 coverImage: 1,
                 podcast_url: 1,
+                hlsUrl: 1,
+                'processing.status': 1,
+                videoWidth: 1,
+                videoHeight: 1,
                 category: { name: 1 },
                 subCategory: { name: 1 },
                 location: 1,
@@ -785,6 +858,10 @@ const getSinglePodcast = async (id: string, viewer?: JwtPayload | null) => {
 
     withStationDonationLink(podcast);
     await attachEngagementCounts([podcast]);
+    // Job ids and AWS error text are for admins; apps only need the status.
+    if (!isAdmin && podcast.processing) {
+        podcast.processing = { status: podcast.processing.status };
+    }
     return {
         ...podcast,
         isLike,
@@ -826,6 +903,7 @@ const deletePodcastFromDB = async (userData: JwtPayload, id: string) => {
             Album.updateMany({ podcasts: id }, { $pull: { podcasts: id } }),
             Like.deleteMany({ podcast: id }),
         ]);
+        mediaService.deleteMediaFolder(id);
         return deleted;
     } else {
         const podcast = await Podcast.findOne({
@@ -848,6 +926,7 @@ const deletePodcastFromDB = async (userData: JwtPayload, id: string) => {
             Album.updateMany({ podcasts: id }, { $pull: { podcasts: id } }),
             Like.deleteMany({ podcast: id }),
         ]);
+        mediaService.deleteMediaFolder(id);
         return deleted;
     }
 };
@@ -1011,6 +1090,7 @@ const getHomeData = async () => {
                         title: '$latestPodcast.title',
                         description: '$latestPodcast.description',
                         podcast_url: '$latestPodcast.podcast_url',
+                        hlsUrl: '$latestPodcast.hlsUrl',
                         coverImage: '$latestPodcast.coverImage',
                     },
                 },
@@ -1124,6 +1204,10 @@ const getPodcastForSubcategories = async (categoryId: string) => {
                             title: 1,
                             coverImage: 1,
                             podcast_url: 1,
+                            hlsUrl: 1,
+                            'processing.status': 1,
+                            videoWidth: 1,
+                            videoHeight: 1,
                             duration: 1,
                             createdAt: 1,
                             location: 1,
@@ -1247,6 +1331,7 @@ const deleteAllPodcastsOfCreator = async (creatorId: string) => {
     podcasts.forEach((p) => {
         if (p.podcast_url) deleteFileFromS3(getCloudFrontUrl(p.podcast_url));
         if (p.coverImage) deleteFileFromS3(getCloudFrontUrl(p.coverImage));
+        mediaService.deleteMediaFolder(String(p._id));
     });
     await deleteKeys('home:data');
     return podcasts.length;

@@ -7,6 +7,7 @@ import server from './app';
 import config from './app/config';
 import seedSuperAdmin from './app/DB';
 import seedStation from './app/DB/station';
+import { startMediaSweeper } from './app/modules/media/media.service';
 import { errorLogger, logger } from './app/shared/logger';
 
 // import { initializeSocket } from './app/socket/socketManager';
@@ -31,6 +32,8 @@ async function main() {
             logger.info(`Server running on http://0.0.0.0:${port}`);
             seedSuperAdmin();
             seedStation();
+            // Safety net for media conversions (missed webhooks, failed starts).
+            startMediaSweeper();
         });
 
         // Global unhandled rejection handler

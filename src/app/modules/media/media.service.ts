@@ -537,8 +537,37 @@ export const sweepMedia = async (now = Date.now()) => {
     return summary;
 };
 
+/**
+ * One startup line saying whether conversion is on and what is missing, so a
+ * misconfigured server is visible in `docker logs` instead of silently skipping.
+ */
+export const logMediaConfigStatus = () => {
+    const cfg = mediaConfig();
+    const raw = process.env.TRANSCODE_ENABLED;
+    if (!cfg.enabled) {
+        logger.info(
+            `Media conversion: OFF (TRANSCODE_ENABLED=${raw === undefined ? '<not set>' : JSON.stringify(raw)}; must be exactly "true"). Uploads play their original file.`
+        );
+        return;
+    }
+    const missing = [
+        !cfg.roleArn && 'MEDIACONVERT_ROLE_ARN',
+        !cfg.webhookSecret && 'MEDIA_WEBHOOK_SECRET',
+        !process.env.AWS_ACCESS_KEY_ID && 'AWS_ACCESS_KEY_ID',
+    ].filter(Boolean);
+    const summary = `region ${cfg.region}, bucket ${cfg.bucket}, CDN ${cfg.cdnBase}`;
+    if (missing.length) {
+        errorLogger.error(
+            `Media conversion: ON but MISCONFIGURED, missing ${missing.join(', ')} (${summary})`
+        );
+    } else {
+        logger.info(`Media conversion: ON (${summary})`);
+    }
+};
+
 /** Starts the periodic sweeper (call once after the DB connects). */
 export const startMediaSweeper = () => {
+    logMediaConfigStatus();
     const timer = setInterval(() => {
         sweepMedia().catch((err) => errorLogger.error('Media sweeper failed:', err));
     }, SWEEP_EVERY_MS);

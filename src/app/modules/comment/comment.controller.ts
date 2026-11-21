@@ -37,7 +37,7 @@ const updateComment = catchAsync(async (req, res) => {
 });
 const deleteComment = catchAsync(async (req, res) => {
     const result = await commentServices.deleteComment(
-        req.user.profileId,
+        req.user,
         req.params.id
     );
     sendResponse(res, {
@@ -55,33 +55,33 @@ const likeUnlikeComment = catchAsync(async (req, res) => {
     sendResponse(res, {
         statusCode: httpStatus.OK,
         success: true,
-        message: 'Comment  successfully',
+        message: result.liked ? 'Comment liked' : 'Comment unliked',
         data: result,
     });
 });
 const getPodcastComments = catchAsync(async (req, res) => {
     const result = await commentServices.getPodcastComments(
-        req.user.profileId,
+        req.user,
         req.params.id,
         req.query
     );
     sendResponse(res, {
         statusCode: httpStatus.OK,
         success: true,
-        message: 'Podcast Comment retrieved  successfully',
+        message: 'Podcast comments retrieved successfully',
         data: result,
     });
 });
 const getReplies = catchAsync(async (req, res) => {
     const result = await commentServices.getReplies(
-        req.user.profileId,
+        req.user,
         req.params.id,
         req.query
     );
     sendResponse(res, {
         statusCode: httpStatus.OK,
         success: true,
-        message: 'Replies retrieved  successfully',
+        message: 'Replies retrieved successfully',
         data: result,
     });
 });

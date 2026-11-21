@@ -26,6 +26,7 @@ import { escapeRegex } from '../../helper/sanitizeQuery';
 import { clipFilter, typeFilterFromQuery } from './podcast.constant';
 import { typeRuleViolations } from './podcast.validation';
 import mediaService, { s3KeyFromUrl } from '../media/media.service';
+import { probeVideoDimensions } from '../media/media.probe';
 import { errorLogger } from '../../shared/logger';
 /** Fields a client may set. Counters, ownership and moderation status are server-controlled. */
 const EDITABLE_FIELDS = [
@@ -132,7 +133,34 @@ const assertTypeRulesOnUpdate = async (
  * now stands. Conversion problems never fail the upload: the original
  * `podcast_url` keeps playing and the failure is recorded on `processing`.
  */
-const startMediaConversion = async <T extends { _id: unknown }>(doc: T) => {
+/**
+ * Stores the video's display size (rotation applied) when the upload didn't send
+ * one, read from the file header in ~100 ms. Apps use it to show portrait clips
+ * full-screen and landscape videos uncropped; conversion uses it to pick renditions.
+ * MediaConvert would fill it too, but only after the job — and not at all when
+ * conversion is off. Never fails the upload.
+ */
+const fillVideoDims = async <T extends { _id: unknown }>(doc: T): Promise<T> => {
+    const d = doc as any;
+    if (d.mediaType !== 'video' || d.videoWidth || !d.podcast_url) return doc;
+    try {
+        const dims = await probeVideoDimensions(d.podcast_url);
+        if (!dims) return doc;
+        const updated = await Podcast.findOneAndUpdate(
+            // Only if the file is unchanged and nobody set a size meanwhile.
+            { _id: d._id, podcast_url: d.podcast_url, videoWidth: null },
+            { $set: { videoWidth: dims.width, videoHeight: dims.height } },
+            { includeHidden: true, new: true } as never
+        );
+        return (updated as unknown as T) ?? doc;
+    } catch (err) {
+        errorLogger.error(`Could not read video size for ${d._id}:`, err);
+        return doc;
+    }
+};
+
+const startMediaConversion = async <T extends { _id: unknown }>(input: T) => {
+    const doc = await fillVideoDims(input);
     try {
         const updated = await mediaService.startTranscode(String(doc._id), {
             reset: true,
@@ -902,6 +930,8 @@ const deletePodcastFromDB = async (userData: JwtPayload, id: string) => {
         await Promise.all([
             Album.updateMany({ podcasts: id }, { $pull: { podcasts: id } }),
             Like.deleteMany({ podcast: id }),
+            Bookmark.deleteMany({ podcast: id }),
+            Comment.deleteMany({ podcast: id }),
         ]);
         mediaService.deleteMediaFolder(id);
         return deleted;
@@ -925,6 +955,8 @@ const deletePodcastFromDB = async (userData: JwtPayload, id: string) => {
         await Promise.all([
             Album.updateMany({ podcasts: id }, { $pull: { podcasts: id } }),
             Like.deleteMany({ podcast: id }),
+            Bookmark.deleteMany({ podcast: id }),
+            Comment.deleteMany({ podcast: id }),
         ]);
         mediaService.deleteMediaFolder(id);
         return deleted;
@@ -1306,7 +1338,7 @@ const toggleLikePodcast = async (podcastId: string, userData: JwtPayload) => {
 };
 
 /**
- * Deletes every podcast owned by a creator (files, likes, bookmarks, album refs).
+ * Deletes every podcast owned by a creator (files, likes, bookmarks, comments, album refs).
  * Called when a creator account is deleted or rejected: otherwise their podcasts
  * stay public with a dangling `creator` reference that nobody can edit or delete.
  */
@@ -1322,6 +1354,7 @@ const deleteAllPodcastsOfCreator = async (creatorId: string) => {
         Podcast.deleteMany({ _id: { $in: ids } }),
         Like.deleteMany({ podcast: { $in: ids } }),
         Bookmark.deleteMany({ podcast: { $in: ids } }),
+        Comment.deleteMany({ podcast: { $in: ids } }),
         Album.updateMany(
             { podcasts: { $in: ids } },
             { $pull: { podcasts: { $in: ids } } }

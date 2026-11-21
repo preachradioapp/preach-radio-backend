@@ -16,7 +16,8 @@
     "test": "node --test --test-concurrency=1 -r ts-node/register \"src/**/*.test.ts\"",
     "create-module": "ts-node src/app/create_module_tem.ts modules",
     "migrate:likes": "ts-node src/scripts/migrate-podcast-likes.ts",
-    "media:backfill": "ts-node src/scripts/transcode-existing.ts"
+    "media:backfill": "ts-node src/scripts/transcode-existing.ts",
+    "media:dims": "ts-node src/scripts/backfill-video-dims.ts"
   },
   "keywords": [],
   "author": "",

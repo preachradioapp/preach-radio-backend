@@ -8,6 +8,8 @@ const validateRequest = (schema: AnyZodObject) => {
     await schema.parseAsync({
       body: req.body,
       cookies: req.cookies,
+      // Schemas that don't declare `params` ignore it (zod strips unknown keys).
+      params: req.params,
     });
     return next();
   });

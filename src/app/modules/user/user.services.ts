@@ -19,6 +19,7 @@ import sendEmail from '../../utilities/sendEmail';
 import Admin from '../admin/admin.model';
 import Creator from '../creator/creator.model';
 import podcastService from '../podcast/podcast.service';
+import commentServices from '../comment/comment.service';
 import { TUser, TUserRole } from './user.interface';
 import { createToken } from './user.utils';
 dotenv.config();
@@ -193,6 +194,7 @@ const deleteUserAccount = async (user: JwtPayload, password: string) => {
         throw new AppError(httpStatus.FORBIDDEN, 'Password do not match');
     }
 
+    await commentServices.deleteCommentsOfUser(user.profileId);
     if (userData.role === USER_ROLE.creator) {
         // Previously this always deleted from NormalUser, so a creator's profile
         // (and all their podcasts) were left behind.
@@ -340,6 +342,7 @@ const deleteUserByAdmin = async (userId: string, actorId?: string) => {
     assertManageable(user, actorId);
 
     await User.findByIdAndDelete(user._id);
+    if (user.profileId) await commentServices.deleteCommentsOfUser(String(user.profileId));
     if (user.role == USER_ROLE.user) {
         const result = await NormalUser.findByIdAndDelete(user.profileId);
         return result;

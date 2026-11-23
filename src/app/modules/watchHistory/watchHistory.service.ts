@@ -5,12 +5,16 @@ const getWatchedHistory = async (
     profileId: string,
     query: Record<string, unknown>
 ) => {
+    // A replay bumps `updatedAt` (see countPodcastView), so "last played" is
+    // `updatedAt`. Older apps that send no sort keep the previous order.
     const resultQuery = new QueryBuilder(
         WatchHistory.find({ user: profileId })
             .lean()
             .populate({
                 path: 'podcast',
-                select: 'title name coverImage description duration podcast_url hlsUrl processing.status videoWidth videoHeight creator subCategory category address location tags totalView createdAt',
+                // type / mediaType / durationSeconds let the app tell clips from
+                // episodes and video from audio; station is the owner of platform podcasts.
+                select: 'title name coverImage description duration durationSeconds podcast_url hlsUrl processing.status videoWidth videoHeight mediaType type creator station subCategory category address location tags totalView totalLikes createdAt',
                 populate: [
                     {
                         path: 'category',
@@ -22,6 +26,10 @@ const getWatchedHistory = async (
                     },
                     {
                         path: 'creator',
+                        select: 'name profile_image',
+                    },
+                    {
+                        path: 'station',
                         select: 'name profile_image',
                     },
                 ],
@@ -50,8 +58,9 @@ cron.schedule('0 2 * * 0', async () => {
         const uniqueUsers = await WatchHistory.distinct('user');
 
         for (const userId of uniqueUsers) {
+            // Keep the 50 most recently *played* (a replay bumps updatedAt).
             const latestEntries = await WatchHistory.find({ user: userId })
-                .sort({ createdAt: -1 })
+                .sort({ updatedAt: -1 })
                 .limit(50)
                 .select('_id');
 

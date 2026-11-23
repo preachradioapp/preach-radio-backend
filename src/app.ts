@@ -14,6 +14,8 @@ import {
 } from './app/helper/presignedUrlGenerator';
 import sendContactUsEmail from './app/helper/sendContactUsEmail';
 import globalErrorHandler from './app/middlewares/globalErrorHandler';
+import auth from './app/middlewares/auth';
+import { USER_ROLE } from './app/modules/user/user.constant';
 import notFound from './app/middlewares/notFound';
 import { ILiveSession } from './app/modules/liveSession/liveSession.interface';
 import LiveSessionServices from './app/modules/liveSession/liveSession.service';
@@ -144,13 +146,30 @@ app.get('/redis-health', async (req, res) => {
 });
 
 // for s3 bucket-------------------
-app.post('/generate-presigned-url', async (req, res) => {
+// Signed-in users only, and only media files: an open presign endpoint let anyone
+// put arbitrary files (e.g. HTML) on our bucket/CDN.
+const anySignedIn = auth(
+    USER_ROLE.user,
+    USER_ROLE.creator,
+    USER_ROLE.admin,
+    USER_ROLE.superAdmin
+);
+const MEDIA_MIME = /^(image|audio|video)\/[\w.+-]{1,60}$/;
+
+app.post('/generate-presigned-url', anySignedIn, async (req, res) => {
     const { fileType, fileCategory } = req.body || {};
     // Throwing here would hang the request (Express 4 doesn't catch async throws).
     if (typeof fileType !== 'string' || typeof fileCategory !== 'string') {
         res.status(httpStatus.BAD_REQUEST).json({
             success: false,
             message: 'File type and file category is required',
+        });
+        return;
+    }
+    if (!MEDIA_MIME.test(fileType)) {
+        res.status(httpStatus.BAD_REQUEST).json({
+            success: false,
+            message: 'Only image, audio and video files can be uploaded',
         });
         return;
     }
@@ -163,8 +182,24 @@ app.post('/generate-presigned-url', async (req, res) => {
     }
 });
 
-app.post('/generate-multiple-presigned-urls', async (req, res) => {
-    const { files } = req.body;
+app.post('/generate-multiple-presigned-urls', anySignedIn, async (req, res) => {
+    const { files } = req.body || {};
+    if (
+        !Array.isArray(files) ||
+        files.length > 20 ||
+        files.some(
+            (f: any) =>
+                typeof f?.fileType !== 'string' ||
+                typeof f?.fileCategory !== 'string' ||
+                !MEDIA_MIME.test(f.fileType)
+        )
+    ) {
+        res.status(httpStatus.BAD_REQUEST).json({
+            success: false,
+            message: 'Send up to 20 image, audio or video files',
+        });
+        return;
+    }
 
     try {
         const result = await generateMultiplePresignedUrls(files);

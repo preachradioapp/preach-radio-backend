@@ -17,6 +17,7 @@ const watchHistorySchema = new Schema<IWatchHistory>(
 );
 
 watchHistorySchema.index({ user: 1, podcast: 1 });
+watchHistorySchema.index({ user: 1, updatedAt: -1 }); // a user's history, last played first
 
 watchHistorySchema.index({ createdAt: -1 });
 

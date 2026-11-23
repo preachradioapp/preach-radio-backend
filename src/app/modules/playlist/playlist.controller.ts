@@ -13,6 +13,7 @@ const createPlaylist = catchAsync(async (req, res) => {
 
     const result = await PodcastPlaylistService.createPlaylist(
         req.user.profileId,
+        req.user.role,
         req.body
     );
     sendResponse(res, {
@@ -24,7 +25,10 @@ const createPlaylist = catchAsync(async (req, res) => {
 });
 
 const getAllPlaylists = catchAsync(async (req, res) => {
-    const result = await PodcastPlaylistService.getAllPlaylists(req.query);
+    const result = await PodcastPlaylistService.getAllPlaylists(req.query, {
+        profileId: String(req.user.profileId),
+        role: req.user.role,
+    });
     sendResponse(res, {
         statusCode: httpStatus.OK,
         success: true,
@@ -48,7 +52,8 @@ const getMyPlaylists = catchAsync(async (req, res) => {
 
 const getPlaylistById = catchAsync(async (req, res) => {
     const result = await PodcastPlaylistService.getPlaylistById(
-        req.params.playlistId
+        req.params.playlistId,
+        { profileId: String(req.user.profileId), role: req.user.role }
     );
     sendResponse(res, {
         statusCode: httpStatus.OK,
@@ -91,7 +96,37 @@ const deletePlaylist = catchAsync(async (req, res) => {
     });
 });
 
+const addPodcast = catchAsync(async (req, res) => {
+    const result = await PodcastPlaylistService.addPodcastToPlaylist(
+        req.user.profileId,
+        req.params.playlistId,
+        req.body.podcastId
+    );
+    sendResponse(res, {
+        statusCode: httpStatus.OK,
+        success: true,
+        message: 'Podcast added to playlist',
+        data: result,
+    });
+});
+
+const removePodcast = catchAsync(async (req, res) => {
+    const result = await PodcastPlaylistService.removePodcastFromPlaylist(
+        req.user.profileId,
+        req.params.playlistId,
+        req.params.podcastId
+    );
+    sendResponse(res, {
+        statusCode: httpStatus.OK,
+        success: true,
+        message: 'Podcast removed from playlist',
+        data: result,
+    });
+});
+
 const PodcastPlaylistController = {
+    addPodcast,
+    removePodcast,
     createPlaylist,
     getAllPlaylists,
     getMyPlaylists,

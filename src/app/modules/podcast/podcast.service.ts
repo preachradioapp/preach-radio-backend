@@ -20,6 +20,7 @@ import WatchHistory from '../watchHistory/watchHistory.model';
 import { IPodcast, PODCAST_STATUS, TPodcastStatus } from './podcast.interface';
 import Podcast, { detectMediaType } from './podcast.model';
 import Like from '../like/like.model';
+import playlistService from '../playlist/playlist.service';
 import { deleteKeys, userCacheKeys } from '../../utilities/cache';
 import { Station } from '../station/station.model';
 import { escapeRegex } from '../../helper/sanitizeQuery';
@@ -415,9 +416,16 @@ const getAllPodcasts = async (
     // only the documents on this page (plain $lookup: works on every MongoDB
     // version). Previously every podcast in the collection
     // was joined with four other collections on every request.
+    // `?sort=popular` → most viewed first (home "Faith Hits"); default newest
+    // first. Both end on `_id` so pages are stable when values tie.
+    const sortStage: Record<string, 1 | -1> =
+        query.sort === 'popular'
+            ? { totalView: -1, createdAt: -1, _id: -1 }
+            : { createdAt: -1, _id: -1 };
+
     const pagePipeline: PipelineStage[] = [
         { $match: match },
-        { $sort: { createdAt: -1, _id: -1 } },
+        { $sort: sortStage },
         { $skip: skip },
         { $limit: limit },
         {
@@ -929,6 +937,7 @@ const deletePodcastFromDB = async (userData: JwtPayload, id: string) => {
         const deleted = await Podcast.findByIdAndDelete(id, ADMIN_QUERY);
         await Promise.all([
             Album.updateMany({ podcasts: id }, { $pull: { podcasts: id } }),
+            playlistService.pullPodcastsFromPlaylists([id]),
             Like.deleteMany({ podcast: id }),
             Bookmark.deleteMany({ podcast: id }),
             Comment.deleteMany({ podcast: id }),
@@ -954,6 +963,7 @@ const deletePodcastFromDB = async (userData: JwtPayload, id: string) => {
         const deleted = await Podcast.findByIdAndDelete(id, ADMIN_QUERY);
         await Promise.all([
             Album.updateMany({ podcasts: id }, { $pull: { podcasts: id } }),
+            playlistService.pullPodcastsFromPlaylists([id]),
             Like.deleteMany({ podcast: id }),
             Bookmark.deleteMany({ podcast: id }),
             Comment.deleteMany({ podcast: id }),
@@ -1338,7 +1348,7 @@ const toggleLikePodcast = async (podcastId: string, userData: JwtPayload) => {
 };
 
 /**
- * Deletes every podcast owned by a creator (files, likes, bookmarks, comments, album refs).
+ * Deletes every podcast owned by a creator (files, likes, bookmarks, comments, album and playlist refs).
  * Called when a creator account is deleted or rejected: otherwise their podcasts
  * stay public with a dangling `creator` reference that nobody can edit or delete.
  */
@@ -1359,6 +1369,7 @@ const deleteAllPodcastsOfCreator = async (creatorId: string) => {
             { podcasts: { $in: ids } },
             { $pull: { podcasts: { $in: ids } } }
         ),
+        playlistService.pullPodcastsFromPlaylists(ids),
     ]);
     // File cleanup is best-effort and must not block the account deletion.
     podcasts.forEach((p) => {

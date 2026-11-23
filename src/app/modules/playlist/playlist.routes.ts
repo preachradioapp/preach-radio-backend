@@ -74,4 +74,19 @@ router.delete(
     PodcastPlaylistController.deletePlaylist
 );
 
+// Add / remove one podcast atomically (no need to send the whole list).
+router.post(
+    '/add-podcast/:playlistId',
+    auth(USER_ROLE.user, USER_ROLE.creator),
+    validateRequest(PodcastPlaylistValidations.addPodcastValidationSchema),
+    PodcastPlaylistController.addPodcast
+);
+
+router.delete(
+    '/remove-podcast/:playlistId/:podcastId',
+    auth(USER_ROLE.user, USER_ROLE.creator),
+    validateRequest(PodcastPlaylistValidations.removePodcastValidationSchema),
+    PodcastPlaylistController.removePodcast
+);
+
 export const podcastPlaylistRoutes = router;

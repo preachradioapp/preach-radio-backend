@@ -7,6 +7,7 @@ import { User } from '../user/user.model';
 import { ICreator } from './creator.interface';
 import Creator from './creator.model';
 import podcastService from '../podcast/podcast.service';
+import playlistService from '../playlist/playlist.service';
 
 const updateCreatorProfile = async (id: string, payload: Partial<ICreator>) => {
     const creator = await Creator.findById(id);
@@ -411,6 +412,7 @@ const approveRejectCreator = async (
     } else if (isApproved === false) {
         // Rejection deletes the account, so it must take the creator's content too.
         await podcastService.deleteAllPodcastsOfCreator(id);
+        await playlistService.deletePlaylistsOfUser(String(id));
         await Creator.findByIdAndDelete(id);
         await User.deleteOne({ _id: creator.user });
         return null;

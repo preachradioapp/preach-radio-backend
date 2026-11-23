@@ -32,7 +32,8 @@ const getMyBookmarkFromDB = async (
     const resultQuery = new QueryBuilder(
         Bookmark.find({ user: profileId }).populate({
             path: 'podcast',
-            select: 'title duration coverImage creator subCategory category totalView createdAt',
+            // Everything the app needs to show and play it (same fields as watch history).
+            select: 'title description coverImage duration durationSeconds podcast_url hlsUrl processing.status videoWidth videoHeight mediaType type creator station subCategory category tags totalView totalLikes createdAt',
             populate: [
                 {
                     path: 'category',
@@ -44,6 +45,10 @@ const getMyBookmarkFromDB = async (
                 },
                 {
                     path: 'creator',
+                    select: 'name profile_image',
+                },
+                {
+                    path: 'station',
                     select: 'name profile_image',
                 },
             ],

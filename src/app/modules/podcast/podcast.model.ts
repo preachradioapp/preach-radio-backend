@@ -167,7 +167,7 @@ PodcastSchema.index({ category: 1, createdAt: -1 }); // browse by category
 PodcastSchema.index({ subCategory: 1, createdAt: -1 }); // browse by subcategory
 PodcastSchema.index({ type: 1, createdAt: -1 }); // reels / clips feed
 PodcastSchema.index({ duration: 1 }); // legacy reels rule for untyped records
-PodcastSchema.index({ totalView: -1 }); // popular / trending
+PodcastSchema.index({ totalView: -1, createdAt: -1 }); // popular / trending (`/podcast/all?sort=popular`)
 // The media sweeper looks for unfinished conversions; documents without
 // `processing` are left out of the index.
 PodcastSchema.index(

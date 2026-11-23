@@ -377,6 +377,51 @@ describe('getAllPodcasts', () => {
         });
     });
 
+    it('sort=popular orders episodes by views, newest first on ties, and pages stably', async () => {
+        const make = (title: string, totalView: number, day: number) =>
+            makePodcast({
+                title,
+                type: 'episode',
+                totalView,
+                duration: 30,
+                durationSeconds: 1800,
+                createdAt: new Date(2026, 0, day),
+            });
+        await make('Quiet', 1, 5);
+        await make('Hit', 50, 1);
+        await make('TieOld', 10, 2);
+        await make('TieNew', 10, 3);
+        await makePodcast({
+            title: 'ViralClip',
+            type: 'clip',
+            totalView: 999,
+            duration: 0.45,
+            durationSeconds: 45,
+        });
+
+        const query = { type: 'episode', sort: 'popular' };
+        const all = await podcastService.getAllPodcasts({ ...query });
+        assert.deepEqual(
+            all.result.map((r: any) => r.title),
+            ['Hit', 'TieNew', 'TieOld', 'Quiet']
+        );
+        const page2 = await podcastService.getAllPodcasts({
+            ...query,
+            page: 2,
+            limit: 2,
+        });
+        assert.deepEqual(
+            page2.result.map((r: any) => r.title),
+            ['TieOld', 'Quiet']
+        );
+        // Unknown sort values fall back to newest first.
+        const fallback = await podcastService.getAllPodcasts({
+            type: 'episode',
+            sort: '$where',
+        });
+        assert.equal(fallback.result[0].title, 'Quiet');
+    });
+
     it('searches title, description and creator name, safely escaping regex input', async () => {
         await makePodcast({ title: 'Grace upon grace' });
         await makePodcast({

@@ -22,6 +22,7 @@ import { subCategoryRoutes } from '../modules/subCategory/subCategory.routes';
 import { superAdminRoutes } from '../modules/superAdmin/superAdmin.routes';
 import { userRoutes } from '../modules/user/user.routes';
 import { watchHistoryRoutes } from '../modules/watchHistory/watchHistory.routes';
+import { deviceRoutes } from '../modules/device/device.routes';
 
 const router = Router();
 
@@ -46,6 +47,10 @@ const moduleRoutes = [
     {
         path: '/notification',
         router: notificationRoutes,
+    },
+    {
+        path: '/device',
+        router: deviceRoutes,
     },
 
     {

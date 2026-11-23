@@ -8,6 +8,7 @@ import config from './app/config';
 import seedSuperAdmin from './app/DB';
 import seedStation from './app/DB/station';
 import { startMediaSweeper } from './app/modules/media/media.service';
+import { startNotificationWorker, stopNotificationWorker } from './app/modules/notification/notification.worker';
 import { errorLogger, logger } from './app/shared/logger';
 
 // import { initializeSocket } from './app/socket/socketManager';
@@ -34,6 +35,8 @@ async function main() {
             seedStation();
             // Safety net for media conversions (missed webhooks, failed starts).
             startMediaSweeper();
+            // Push delivery + announcements (MongoDB-backed queue, retries).
+            startNotificationWorker();
         });
 
         // Global unhandled rejection handler
@@ -49,6 +52,7 @@ async function main() {
         // Global termination signal handler
         process.on('SIGTERM', () => {
             logger.info('SIGTERM signal received');
+            stopNotificationWorker();
             if (myServer) {
                 myServer.close(() => logger.info('Server closed gracefully'));
             }

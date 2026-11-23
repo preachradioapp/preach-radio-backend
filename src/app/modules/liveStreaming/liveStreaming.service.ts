@@ -6,11 +6,10 @@ import { v4 as uuidv4 } from 'uuid';
 import config from '../../config';
 import { HMS_ENDPOINT } from '../../constant';
 import AppError from '../../error/appError';
-import { ENUM_NOTIFICATION_TYPE } from '../../utilities/enum';
 import { getMgmToken } from '../../utilities/getMgmToken';
 import { ENUM_LIVE_SESSION } from '../liveSession/liveSession.enum';
 import LiveSession from '../liveSession/liveSession.model';
-import Notification from '../notification/notification.model';
+import { emitAppEvent } from '../../events/appEvents';
 import { Station } from '../station/station.model';
 import { USER_ROLE } from '../user/user.constant';
 import { ENUM_LIVE_STREAM_STATUS } from './liveStreaming.enum';
@@ -112,12 +111,10 @@ const inviteUser = async (
         room_id: payload.room_id,
     });
 
-    await Notification.create({
-        title: 'Live Streaming Invitation',
-        message: `You have been invited to join the live streaming room: ${room.name}`,
-        receiver: payload.invitedUserId,
-        type: ENUM_NOTIFICATION_TYPE.LIVE_INVITATION,
-        redirectId: room.room_id,
+    emitAppEvent('live.invited', {
+        roomId: room.room_id,
+        roomName: room.name,
+        invitedProfileId: String(payload.invitedUserId),
     });
 
     return token;

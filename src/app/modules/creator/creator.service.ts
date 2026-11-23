@@ -8,6 +8,9 @@ import { ICreator } from './creator.interface';
 import Creator from './creator.model';
 import podcastService from '../podcast/podcast.service';
 import playlistService from '../playlist/playlist.service';
+import { emitAppEvent } from '../../events/appEvents';
+import deviceService from '../device/device.service';
+import notificationService from '../notification/notification.services';
 
 const updateCreatorProfile = async (id: string, payload: Partial<ICreator>) => {
     const creator = await Creator.findById(id);
@@ -408,11 +411,15 @@ const approveRejectCreator = async (
             { isApproved: true },
             { new: true, runValidators: true }
         );
+        // Only on the change, not when an approved creator is "approved" again.
+        if (result && !creator.isApproved) emitAppEvent('creator.approved', { creatorId: String(id) });
         return result;
     } else if (isApproved === false) {
         // Rejection deletes the account, so it must take the creator's content too.
         await podcastService.deleteAllPodcastsOfCreator(id);
         await playlistService.deletePlaylistsOfUser(String(id));
+        await deviceService.deleteDevicesOfUser(String(id));
+        await notificationService.deleteNotificationsOfUser(String(id));
         await Creator.findByIdAndDelete(id);
         await User.deleteOne({ _id: creator.user });
         return null;

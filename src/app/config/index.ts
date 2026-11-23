@@ -37,6 +37,11 @@ export default {
         smtp_pass: process.env.SMTP_PASS,
         name: process.env.SERVICE_NAME,
     },
+    oneSignal: {
+        app_id: process.env.ONESIGNAL_APP_ID,
+        // App API key (OneSignal dashboard → Settings → Keys & IDs).
+        api_key: process.env.ONESIGNAL_API_KEY,
+    },
     hms: {
         hms_access_key: process.env.HMS_ACCESS_KEY,
         hms_secret: process.env.HMS_SECRET,

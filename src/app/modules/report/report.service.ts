@@ -8,6 +8,7 @@ import { USER_ROLE } from '../user/user.constant';
 import { User } from '../user/user.model';
 import { IReport } from './report.interface';
 import Report from './report.model';
+import { emitAppEvent } from '../../events/appEvents';
 
 const createReport = async (userData: JwtPayload, payload: IReport) => {
     if (new mongoose.Types.ObjectId(userData?.profileId) == payload.reportTo) {
@@ -29,14 +30,10 @@ const createReport = async (userData: JwtPayload, payload: IReport) => {
         ...payload,
         reportFrom: userData.profileId,
     });
-    // const notificaitonData = {
-    //     title: 'Profile Report',
-    //     message: 'A user report a profile',
-    //     receiver: USER_ROLE.superAdmin,
-    //     type: ENUM_NOTIFICATION_TYPE.GENERAL,
-    // };
-
-    // sendNotification(notificaitonData);
+    emitAppEvent('report.created', {
+        reportId: String(result._id),
+        reason: (result as { reason?: string }).reason,
+    });
     return result;
 };
 

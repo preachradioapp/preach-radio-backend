@@ -9,15 +9,24 @@ export const ENUM_USER_STATUS = {
 };
 
 export const ENUM_NOTIFICATION_TYPE = {
-    COURSE: 'COURSE',
+    /** Admin announcement (broadcast). */
+    GENERAL: 'GENERAL',
+    /** Someone commented on your podcast / replied to your comment. */
+    COMMENT: 'COMMENT',
+    /** A host invited you into a live room. */
+    LIVE_INVITATION: 'LIVE_INVITATION',
+    /** Support answered your message. */
     FEEDBACK: 'FEEDBACK',
+    /** Your creator application was approved. */
+    CREATOR_APPROVED: 'CREATOR_APPROVED',
+    /** Admin: a user reported a profile. */
+    REPORT: 'REPORT',
+    PAYMENT: 'PAYMENT',
+    // Legacy values from the project template; kept so old rows still validate.
+    COURSE: 'COURSE',
     CLASS: 'CLASS',
     ORDER: 'ORDER',
-    GENERAL: 'GENERAL',
-    PAYMENT: 'PAYMENT',
-    LIVE_INVITATION: 'LIVE_INVITATION',
-    COMMENT: 'COMMENT',
-};
+} as const;
 
 export const ENUM_PAYMENT_STATUS = {
     PAID: 'PAID',

@@ -3,8 +3,7 @@ import httpStatus from 'http-status';
 import { JwtPayload } from 'jsonwebtoken';
 import { PipelineStage, Types } from 'mongoose';
 import AppError from '../../error/appError';
-import { ENUM_NOTIFICATION_TYPE } from '../../utilities/enum';
-import Notification from '../notification/notification.model';
+import { emitAppEvent } from '../../events/appEvents';
 import Podcast from '../podcast/podcast.model';
 import { USER_ROLE } from '../user/user.constant';
 import { IComment, TCommentorType } from './comment.interface';
@@ -160,18 +159,6 @@ const getCommentView = async (id: Types.ObjectId, ctx: ViewContext) => {
     return toView(doc, ctx);
 };
 
-/** In-app notification; never fails the request that triggered it. */
-const notify = (receiver: Types.ObjectId | null | undefined, sender: string, title: string, message: string, podcastId: Types.ObjectId) => {
-    if (!receiver || String(receiver) === sender) return;
-    Notification.create({
-        title,
-        message,
-        receiver: String(receiver),
-        type: ENUM_NOTIFICATION_TYPE.COMMENT,
-        redirectId: String(podcastId),
-    }).catch(() => undefined);
-};
-
 const createComment = async (
     user: JwtPayload,
     payload: { podcast: string; text: string }
@@ -186,13 +173,15 @@ const createComment = async (
         parent: null,
     });
     const view = await getCommentView(created._id, { viewer: user, ownerId: podcast.creator });
-    notify(
-        podcast.creator,
-        String(user.profileId),
-        'New comment',
-        `${view.commentor.name} commented on "${podcast.title ?? 'your podcast'}": ${payload.text.slice(0, 80)}`,
-        podcast._id
-    );
+    emitAppEvent('comment.created', {
+        podcastId: String(podcast._id),
+        podcastTitle: podcast.title ?? 'your podcast',
+        podcastOwnerId: podcast.creator ? String(podcast.creator) : null,
+        commentId: String(created._id),
+        actorId: String(user.profileId),
+        actorName: view.commentor.name,
+        text: payload.text,
+    });
     return view;
 };
 
@@ -215,13 +204,14 @@ const createReply = async (
         likers: [],
     });
     const view = await getCommentView(created._id, { viewer: user, ownerId: podcast.creator });
-    notify(
-        parent.commentor,
-        String(user.profileId),
-        'New reply',
-        `${view.commentor.name} replied to your comment: ${payload.text.slice(0, 80)}`,
-        podcast._id
-    );
+    emitAppEvent('comment.replied', {
+        podcastId: String(podcast._id),
+        parentAuthorId: String(parent.commentor),
+        commentId: String(created._id),
+        actorId: String(user.profileId),
+        actorName: view.commentor.name,
+        text: payload.text,
+    });
     return view;
 };
 

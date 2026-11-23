@@ -4,8 +4,7 @@ import AppError from '../../error/appError';
 import { IFeedback } from './feedback.interface';
 import Feedback from './feedback.model';
 import QueryBuilder from '../../builder/QueryBuilder';
-// import { ENUM_NOTIFICATION_TYPE } from '../../utilities/enum';
-// import sendNotification from '../../helper/sendNotification';
+import { emitAppEvent } from '../../events/appEvents';
 
 const createFeedBack = async (userId: string, payload: IFeedback) => {
     const result = await Feedback.create({ ...payload, user: userId });
@@ -42,14 +41,12 @@ const replyFeedback = async (id: string, replyMessage: string) => {
         { new: true, runValidators: true }
     );
 
-    //!TODO: need to send notification to user for reply message
-    // const notificationData = {
-    //     title: 'Feedback Reply',
-    //     message: replyMessage,
-    //     receiver: feedback.user.toString(),
-    //     type: ENUM_NOTIFICATION_TYPE.GENERAL,
-    // };
-    // sendNotification(notificationData);
+    // `feedback.user` is the sender's profile id (see feedback.controller).
+    emitAppEvent('feedback.replied', {
+        feedbackId: String(feedback._id),
+        profileId: String(feedback.user),
+        reply: replyMessage,
+    });
     return result;
 };
 

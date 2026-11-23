@@ -23,6 +23,8 @@ import router from './app/routes';
 import redis from './app/utilities/redisClient';
 import config from './app/config';
 import { logger } from './app/shared/logger';
+// Domain events → notifications (register listeners once).
+import './app/modules/notification/notification.listeners';
 const app: Application = express();
 dotenv.config();
 

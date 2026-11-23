@@ -21,6 +21,8 @@ import Creator from '../creator/creator.model';
 import podcastService from '../podcast/podcast.service';
 import commentServices from '../comment/comment.service';
 import playlistService from '../playlist/playlist.service';
+import deviceService from '../device/device.service';
+import notificationService from '../notification/notification.services';
 import { TUser, TUserRole } from './user.interface';
 import { createToken } from './user.utils';
 dotenv.config();
@@ -197,6 +199,8 @@ const deleteUserAccount = async (user: JwtPayload, password: string) => {
 
     await commentServices.deleteCommentsOfUser(user.profileId);
     await playlistService.deletePlaylistsOfUser(String(user.profileId));
+    await deviceService.deleteDevicesOfUser(String(user.profileId));
+    await notificationService.deleteNotificationsOfUser(String(user.profileId));
     if (userData.role === USER_ROLE.creator) {
         // Previously this always deleted from NormalUser, so a creator's profile
         // (and all their podcasts) were left behind.
@@ -347,6 +351,8 @@ const deleteUserByAdmin = async (userId: string, actorId?: string) => {
     if (user.profileId) {
         await commentServices.deleteCommentsOfUser(String(user.profileId));
         await playlistService.deletePlaylistsOfUser(String(user.profileId));
+        await deviceService.deleteDevicesOfUser(String(user.profileId));
+        await notificationService.deleteNotificationsOfUser(String(user.profileId));
     }
     if (user.role == USER_ROLE.user) {
         const result = await NormalUser.findByIdAndDelete(user.profileId);

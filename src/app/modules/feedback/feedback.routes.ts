@@ -9,7 +9,7 @@ const router = express.Router();
 
 router.post(
     '/create-feedback',
-    auth(USER_ROLE.user),
+    auth(USER_ROLE.user, USER_ROLE.creator),
     validateRequest(feedbackValidations.createFeedbackValidationSchema),
     feedbackController.createFeedBack
 );

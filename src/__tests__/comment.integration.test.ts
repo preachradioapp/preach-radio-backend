@@ -31,6 +31,8 @@ const Podcast = require('../app/modules/podcast/podcast.model').default;
 const Comment = require('../app/modules/comment/comment.model').default;
 const Notification = require('../app/modules/notification/notification.model').default;
 const comments = require('../app/modules/comment/comment.service').default;
+// Comment notifications go through domain events; app.ts registers these listeners at startup.
+require('../app/modules/notification/notification.listeners');
 
 const oid = () => new mongoose.Types.ObjectId();
 const raw = (name: string) => mongoose.connection.collection(name);
